@@ -105,7 +105,12 @@ function Game_Common:setupOverlay(directx)
 	self.directx = directx
 	self.width, self.height = window.getDimensions(self.gameHwnd)
 	-- making the D3D surface large allows for smooth window resizing
-	self.directx.setupD3D(self.overlayHwnd, window.getScreenSize())
+	local result = self.directx.setupD3D(
+		self.overlayHwnd, window.getScreenSize())
+	if result ~= 0 then
+		error(string.format(
+			"Direct3D initialization failed (HRESULT %s).", tostring(result)))
+	end
 end
 
 function Game_Common:read(address, buffer)
@@ -162,7 +167,12 @@ function Game_Common:nextFrame(drawing, hasFocus)
 		self.directx.beginFrame()
 		self:captureState()
 	end
-	self.directx.endFrame(0, 0, self.width, self.height)
+	local result = self.directx.endFrame(0, 0, self.width, self.height)
+	if result ~= 0 and not self.directXErrorReported then
+		self.directXErrorReported = true
+		io.write("Direct3D frame presentation failed (HRESULT ",
+			tostring(result), ").\n")
+	end
 	return true
 end
 

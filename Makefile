@@ -1,7 +1,9 @@
 ifeq ($(USING_BATCH_FILE),true)
 CC=gcc # for native compilation with MinGW on Windows
+LUAJIT_CROSS=
 else
-CC=i686-w64-mingw32-gcc # for Linux-to-Windows cross-compilation with MinGW (or native with Cygwin)
+CC=x86_64-w64-mingw32-gcc # for 64-bit Windows cross-compilation with MinGW
+LUAJIT_CROSS=x86_64-w64-mingw32-
 endif
 #TODO: add debug build target
 
@@ -27,7 +29,7 @@ default: $(MAIN_AND_OBJECTS)
 # It's like this because LuaJIT takes significantly longer to build than "our" code.
 # There's also a separate "luaclean" build target below for the same reason.
 lua:
-	cd lib/luajit && $(MAKE) PLAT=mingw BUILDMODE=static
+	cd lib/luajit && $(MAKE) PLAT=mingw BUILDMODE=static CROSS=$(LUAJIT_CROSS)
 
 main.o: main.c $(HEADERS)
 	$(CC) $(CFLAGS) -c $^

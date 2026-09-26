@@ -54,7 +54,9 @@ typedef struct {
 } playerExtra;
 
 typedef struct {
-	intptr_t statePtr;        // +000h: Player state code pointer
+	// The game stores these internal game pointers as 32-bit fields even in its
+	// x64 executable; keep the remote structure layout fixed-width.
+	uint32_t statePtr;        // +000h: Player state code pointer
 	byte padding01[0x002];    // +004h to +006h: unknown
 	word basicStatus;         // +006h: Projectile status (< 0 if inactive)
 	byte padding25[0x010];    // +008h to +018h: unknown
@@ -83,8 +85,8 @@ typedef struct {
 	hitbox collisionBox;      // +0A4h: Collision box
 	byte padding19[0x00B];    // +0A9h to +0B4h: unknown
 	// These two point to "struct player"
-	intptr_t opponent;        // +0B4h: Pointer to opponent's main struct
-	intptr_t opponent_alt1;   // +0B8h: Opponent main struct (alt 1)
+	uint32_t opponent;        // +0B4h: Pointer to opponent's main struct
+	uint32_t opponent_alt1;   // +0B8h: Opponent main struct (alt 1)
 	uword xDistance;       // +0BCh: X distance between player and opponent
 	byte padding09[0x016];    // +0BEh to +0D4h: unknown
 	word hitstun;             // +0D4h: Hit stun (also used for dizzy state)
@@ -110,8 +112,8 @@ typedef struct {
 	byte padding21[0x012];    // +192h to +1A8h: unknown
 	// These two point to "struct playerExtra".
 	// This pointer is in different positions depending on the game.
-	intptr_t kof02_extra;     // +1A4h: Pointer to player's "extra" struct
-	intptr_t kof98_extra;     // +1A8h: Pointer to player's "extra" struct
+	uint32_t kof02_extra;     // +1A4h: Pointer to player's "extra" struct
+	uint32_t kof98_extra;     // +1A8h: Pointer to player's "extra" struct
 	byte padding17[0x004];    // +1ACh to +1B0h: unknown
 	ubyte comboCounter;     // +1B0h: Combo counter ("belongs to" opponent)
 	byte padding18[0x023];    // +1B1h to +1D4h: unknown

@@ -71,8 +71,9 @@ local function checkGameIsSteamOrGOG(params, hwnd, lParam)
 	local result = checkWindowTitleAndProcessName(params, hwnd, lParam)
 	if result then
 		local handle = result.gameHandle
-		local modules = winprocess.listLoadedModules(handle, true)
-		result.revision = (modules["steam_api.dll"] and "Steam") or "GOG.com"
+	local modules = winprocess.listLoadedModules(handle, true)
+	result.revision = (modules["steam_api64.dll"] and "Steam x64")
+		or (modules["steam_api.dll"] and "Steam") or "GOG.com"
 	end
 	return result
 end
@@ -99,7 +100,10 @@ local function findGameWindowByParentPID(params, game)
 	end
 
 	local successful = C.EnumWindows(EnumWindowsProc, 0)
-	winerror.checkNotZero(successful)
+	-- EnumWindows returns FALSE when EnumWindowsProc stops after a match.
+	-- A 64-bit target can leave a stale partial-copy error from unrelated
+	-- windows, so only treat FALSE as failure when nothing was detected.
+	if detectedGame == nil then winerror.checkNotZero(successful) end
 	if result ~= nil then
 		game.gameHwnd = result
 		game.prettyName = params.prettyName
@@ -158,6 +162,12 @@ local detectedGames = {
 		prettyName = "King of Fighters 2002 Unlimited Match",
 		targetWindowTitle = "King of Fighters 2002 Unlimited Match",
 		targetProcessName = "KingOfFighters2002UM.exe",
+	}),
+	SteamOrGOGGame:new({
+		module = "steam.kof2002um",
+		prettyName = "King of Fighters 2002 Unlimited Match (64-bit)",
+		targetWindowTitle = "King of Fighters 2002 Unlimited Match",
+		targetProcessName = "KingOfFighters2002UM_x64.exe",
 	}),
 	SteamGame:new({
 		module = "steam.ggxxacplusr",
@@ -270,7 +280,8 @@ function detectgame.findSupportedGame(hInstance)
 	end
 
 	local successful = C.EnumWindows(EnumWindowsProc, 0)
-	winerror.checkNotZero(successful)
+	-- A false return is expected when EnumWindowsProc stops on a match.
+	if detectedGame == nil then winerror.checkNotZero(successful) end
 	if detectedGame ~= nil and hInstance ~= nil then
 		detectedGame.hInstance = hInstance
 		detectedGame.consoleHwnd = window.console()

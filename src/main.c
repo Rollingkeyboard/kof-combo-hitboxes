@@ -23,6 +23,13 @@ void showLuaError(lua_State *L, char *errline);
 int WINAPI WinMain(
     HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpArgv, int nShowCmd)
 {
+	// Create a visible console when launched from Explorer, as the original
+	// viewer expects users to read hotkeys and status there.
+	if (GetConsoleWindow() == NULL) AllocConsole();
+	SetConsoleTitleW(L"KoF Combo Hitbox Viewer 1.0.4 x64");
+	freopen("CONOUT$", "w", stdout);
+	freopen("CONOUT$", "w", stderr);
+	setvbuf(stdout, NULL, _IONBF, 0);
 	int result;
 	lua_State *L = luaL_newstate();
 	luaL_openlibs(L);

@@ -43,6 +43,8 @@ BOOL IsWindowVisible(HWND hWnd);
 BOOL UpdateWindow(HWND hWnd);
 BOOL ShowWindow(HWND hWnd, int nCmdShow);
 BOOL MoveWindow(HWND hWnd, int X, int Y, int nWidth, int nHeight, BOOL bRepaint);
+BOOL SetWindowPos(HWND hWnd, HWND hWndInsertAfter, int X, int Y,
+	int cx, int cy, UINT uFlags);
 ATOM RegisterClassExW(WNDCLASSEX *lpwCx);
 BOOL UnregisterClassW(LPCTSTR lpClassName, HINSTANCE hInstance);
 HWND CreateWindowExW(
@@ -96,6 +98,9 @@ window.WS_EX_TOPMOST = 0x08
 window.WS_EX_TRANSPARENT = 0x20
 window.WS_EX_LAYERED = 0x00080000
 window.WS_EX_COMPOSITED = 0x02000000
+window.SWP_NOSIZE = 0x0001
+window.SWP_NOMOVE = 0x0002
+window.SWP_NOACTIVATE = 0x0010
 -- bit masks for "dwFlags" parameter to SetLayeredWindowAttributes()
 window.LWA_COLORKEY = 0x01
 window.LWA_ALPHA = 0x02
@@ -143,6 +148,7 @@ window.defaultWindowClass = {
 }
 window.createWindowExDefaults = {
 	dwExStyle = bit.bor(
+		window.WS_EX_TOPMOST,
 		window.WS_EX_TRANSPARENT,
 		window.WS_EX_LAYERED,
 		window.WS_EX_COMPOSITED),
@@ -219,11 +225,18 @@ function window.createOverlayWindow(
 		hi,
 		{ lpClassName = ffi.cast("LPCTSTR", atom),
 		nWidth = w, nHeight = h,
-		hWndParent = ffi.cast("HWND", gameHwnd), },
+		hWndParent = NULL, },
 		windowOptions)
 	local overlayHwnd = C.CreateWindowExW(luautil.unpackKeys(
 		newWinOptions, window.createWindowExParamsOrder))
 	winerror.checkNotEqual(overlayHwnd, NULL)
+	-- Keep the transparent overlay above the game when the game regains focus,
+	-- without activating the overlay or stealing keyboard input.
+	local topmost = ffi.cast("HWND", -1)
+	local topmostFlags = bit.bor(
+		window.SWP_NOMOVE, window.SWP_NOSIZE, window.SWP_NOACTIVATE)
+	winerror.checkNotZero(C.SetWindowPos(
+		overlayHwnd, topmost, 0, 0, 0, 0, topmostFlags))
 
 	-- LWA_COLORKEY must be explicitly disabled or the overlay
 	-- won't work (as of Windows 10 Creators Update)
@@ -242,11 +255,13 @@ end
 
 function window.getWindowTitle(hwnd, buffer)
 	local titleLen = C.GetWindowTextLengthW(hwnd)
-	winerror.checkNotZero(titleLen)
+	if titleLen <= 0 then return "" end
 	buffer = (buffer or winutil.makeStringBuffer(titleLen))
 	local limit = winutil.stringBufferLength(buffer)
-	winerror.checkNotZero(C.GetWindowTextW(
-		hwnd, ffi.cast("LPTSTR", buffer), limit))
+	if C.GetWindowTextW(hwnd, ffi.cast("LPTSTR", buffer), limit) <= 0 then
+		-- Some unrelated windows reject title reads; skip them during scans.
+		return ""
+	end
 	return winutil.mbs(buffer)
 end
 
@@ -328,7 +343,12 @@ function window.move(
 	local sizeSource = (resize and source) or target
 	local newW, newH = window.getDimensions(sizeSource, rectBuffer)
 	newW, newH = max(newW, 1), max(newH, 1)
-	local result = C.MoveWindow(target, newX, newY, newW, newH, true)
+	-- Keep the overlay in the topmost band every time it follows the game.
+	-- SWP_NOACTIVATE leaves keyboard focus with the game while its window moves.
+	local topmost = ffi.cast("HWND", -1)
+	local flags = window.SWP_NOACTIVATE
+	local result = C.SetWindowPos(
+		target, topmost, newX, newY, newW, newH, flags)
 	winerror.checkNotZero(result)
 	return result, newX, newY, newW, newH
 end

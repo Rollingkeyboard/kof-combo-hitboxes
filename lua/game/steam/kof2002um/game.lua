@@ -5,6 +5,8 @@ local KOF98 = require("game.steam.kof98um.game")
 local KOF02 = KOF98:new({ parent = KOF98, whoami = "KOF02" })
 
 KOF02.configSection = "kof2002um"
+-- 64-bit game addresses are above the 32-bit RAM range in the base class.
+KOF02.RAMlimit = 0x7FFFFFFFFFFF
 -- game-specific constants
 KOF02.boxtypes = boxtypes
 KOF02.revisions = {
@@ -13,6 +15,15 @@ KOF02.revisions = {
 		playerExtraPtrs = { 0x0167EA00, 0x01683240 },
 		cameraPtr = 0x02208BF8,
 		projectilesListInfo = { start = 0x0166DE20, count = 34, step = 0x220 },
+	},
+	["Steam x64"] = {
+		-- These are RVAs in the x64 executable. The game structures use the
+		-- same packed field layout as the original 1.0.3 reader, but each player
+		-- block begins 0x80 bytes before the live per-player anchor.
+		playerPtrs = { 0x040BA19C, 0x040BA3BC },
+		playerExtraPtrs = { 0x040AB018, 0x040AB330 },
+		cameraPtr = 0x040C259E,
+		projectilesListInfo = { start = 0x040ABC1C, count = 42, step = 0x220 },
 	},
 	["GOG.com"] = {
 		playerPtrs = { 0x01BD33C0, 0x01BD35E0 },
@@ -26,6 +37,17 @@ Additionally, please set Screen to Type B in Game Options, Graphic Settings.]]
 
 function KOF02:extraInit(noExport)
 	self.parent.extraInit(self, false) -- inherit typedefs from KOF98
+	if self.revision == "Steam x64" then
+		-- Player boxes are verified against the 1.0.3 packed player layout.
+		-- Keep projectile reads off until their x64 array is independently mapped.
+		self.projectilesEnabled = false
+	end
+end
+
+function KOF02:relocate(baseAddress)
+	if self.revision == "Steam x64" then
+		self.RAMbase = baseAddress
+	end
 end
 
 function KOF02:setupGauges()
