@@ -72,6 +72,8 @@ KOF98.inputTimelinePeriodMs = 16
 KOF98.shermieFeedbackDurationMs = 1000
 KOF98.shermieMotionWindowMs = 1200
 KOF98.shermieMotionStepWindowMs = 450
+KOF98.rhythmGuideBeatMs = 90
+KOF98.rhythmGuideToleranceMs = 75
 
 KOF98.startupMessage = [[
 Hotkeys available for this game:
@@ -395,6 +397,9 @@ local inputColors = {
 	neutral = colors.rgb(0x60, 0x60, 0x60),
 	timeline = colors.rgb(0x38, 0x38, 0x38),
 	positive = colors.rgb(0x50, 0xFF, 0x80),
+	rhythmCue = colors.rgb(0xFF, 0xD5, 0x60),
+	rhythmMiss = colors.rgb(0xFF, 0x80, 0x50),
+	rhythmCursor = colors.rgb(0xFF, 0xFF, 0xFF),
 	direction = colors.rgb(0xE8, 0xE8, 0xE8),
 	buttons = {
 		colors.rgb(0x70, 0xD8, 0xFF), colors.rgb(0xFF, 0xD5, 0x60),
@@ -407,6 +412,8 @@ local shermieMoveList = {
 	"A=LP, B=LK, C=SP, D=SK; forward/back are relative to Shermie's facing.",
 	"Coach checks P1 keyboard commands; it cannot verify move animation or range.",
 	"Timing window: up to 450 ms between direction changes, 1200 ms total.",
+	"P1 rhythm lane: back, down-back, down, down-forward, forward + B/D.",
+	"Gold notes are targets; green input notes are on beat, orange notes are off beat.",
 	"Throws (close; range cannot be checked from keyboard input):",
 	"  Shermie Flash Original: back or forward + C (SP)",
 	"  Front Flash: back or forward + D (SK)",
@@ -501,6 +508,81 @@ local function ticksElapsed(now, thenTime)
 	local elapsed = now - thenTime
 	if elapsed < 0 then elapsed = elapsed + 0x100000000 end
 	return elapsed
+end
+
+local shermieRhythmDirections = {
+	"back", "downback", "down", "downforward", "forward",
+}
+
+local function timingColor(self, start, step, actualTime)
+	local actualOffset = ticksElapsed(actualTime, start)
+	local targetOffset = (step - 1) * self.rhythmGuideBeatMs
+	if math.abs(actualOffset - targetOffset) <= self.rhythmGuideToleranceMs then
+		return inputColors.positive
+	end
+	return inputColors.rhythmMiss
+end
+
+function KOF98:updateShermieRhythmGuide(which, mask, previousMask, now)
+	if which ~= 1 then return end
+	local direction = directionName(mask)
+	local previousDirection = directionName(previousMask or 0)
+	local directionChanged = direction ~= nil and direction ~= previousDirection
+	local buttons = bit.band(mask, 0xF0)
+	local attackPressed = bit.band(buttons, 0xA0) ~= 0
+		and bit.band(previousMask or 0, 0xA0) == 0
+	local guide = self.shermieRhythmGuide
+
+	if directionChanged and direction == "back" then
+		local restart = not guide or guide.completed or guide.failed
+			or guide.step == #shermieRhythmDirections
+			or ticksElapsed(now, guide.lastHit) > self.shermieMotionStepWindowMs
+		if restart then
+			guide = { start = now, lastHit = now, lastDirection = direction,
+				step = 1, notes = { {
+					time = now, color = inputColors.positive,
+				} } }
+			self.shermieRhythmGuide = guide
+		end
+	end
+	if not guide then return end
+
+	if not guide.completed and not guide.failed
+		and ticksElapsed(now, guide.lastHit) > self.shermieMotionStepWindowMs
+		and not directionChanged then
+		guide.failed = true
+	end
+
+	if directionChanged and direction ~= "back" and not guide.completed
+		and not guide.failed then
+		local nextStep = guide.step + 1
+		if shermieRhythmDirections[nextStep] == direction then
+			guide.step = nextStep
+			guide.lastHit = now
+			guide.lastDirection = direction
+			guide.notes[nextStep] = {
+				time = now,
+				color = timingColor(self, guide.start, nextStep, now),
+			}
+			if nextStep == #shermieRhythmDirections then
+				guide.forwardAt = now
+			end
+		else
+			guide.failed = true
+		end
+	end
+
+	if attackPressed and guide.step >= 4 then guide.attackPressedAt = now end
+	if guide.step == #shermieRhythmDirections and direction == "forward"
+		and bit.band(buttons, 0xA0) ~= 0 and not guide.completed then
+		local attackTime = guide.attackPressedAt or now
+		guide.notes[#shermieRhythmDirections] = {
+			time = attackTime,
+			color = timingColor(self, guide.start,
+				#shermieRhythmDirections, attackTime),
+		}
+		guide.completed = true
+	end
 end
 
 function KOF98:checkShermieMove(which, mask, now)
@@ -660,6 +742,7 @@ function KOF98:updateInputState()
 				recordMotionDirection(self, which, directionName(masks[which]), now)
 			end
 			if self.logInputTransitions then
+				self:updateShermieRhythmGuide(which, masks[which], last, now)
 				self:checkShermieMove(which, masks[which], now)
 			end
 			self.lastInputState[which] = masks[which]
@@ -715,6 +798,42 @@ function KOF98:renderInputTimeline()
 				y - 2, inputColors.positive)
 		end
 	end
+	local guide = self.shermieRhythmGuide
+	if guide then
+		-- Use a single note lane attached to P1's existing input timeline.
+		local laneY = y + 8 * rowPitch + 3
+		local hitLineX = xPositions[1] + width * 0.7
+		local scrollPixelsPerMs = 0.1
+		local now = hotkey.ticks()
+		local elapsed = ticksElapsed(now, guide.start)
+		self:horzLine(xPositions[1], xPositions[1] + width,
+			laneY, inputColors.timeline)
+		self:vertLine(laneY - 3, laneY + 3, hitLineX,
+			inputColors.rhythmCursor)
+		for step = 1, #shermieRhythmDirections do
+			local targetDelta = (step - 1) * self.rhythmGuideBeatMs
+			local targetX = hitLineX
+				+ (elapsed - targetDelta) * scrollPixelsPerMs
+			if targetX >= xPositions[1] and targetX <= xPositions[1] + width then
+				local targetColor = inputColors.rhythmCue
+				if not guide.notes[step]
+					and elapsed > targetDelta + self.rhythmGuideToleranceMs then
+					targetColor = inputColors.rhythmMiss
+				end
+				self:box(targetX - 2, laneY - 2, targetX + 2, laneY + 2,
+					targetColor, inputColors.timeline)
+			end
+			local note = guide.notes[step]
+			if note then
+				local actualElapsed = ticksElapsed(now, note.time)
+				local actualX = hitLineX + actualElapsed * scrollPixelsPerMs
+				if actualX >= xPositions[1] and actualX <= xPositions[1] + width then
+					self:box(actualX - 2, laneY - 2, actualX + 2, laneY + 2,
+						note.color, note.color)
+				end
+			end
+		end
+	end
 end
 
 function KOF98:renderInputDisplay()
@@ -758,12 +877,14 @@ function KOF98:checkInputs()
 			if toggleKey[2] == "logInputTransitions" then
 				self.inputFrames = { {}, {} }
 				self.motionHistory = { {}, {} }
+				self.shermieRhythmGuide = nil
 				self.inputCaptureActive = false
 				self.lastInputState[1], self.lastInputState[2] = nil, nil
 				self.lastInputTime[1], self.lastInputTime[2] = nil, nil
 				self.shermieFollowupUntil = nil
 				if self.logInputTransitions then
 					io.write("Rhythm graph: rows up/back/down/forward/A/B/C/D; each column ~16 ms, ticks ~240 ms apart, newest at right.\n")
+					io.write("Shermie rhythm lane: back, down-back, down, down-forward, forward + B/D; target spacing about 90 ms.\n")
 					printShermieMoveList()
 				end
 			end
