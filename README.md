@@ -37,12 +37,12 @@ Hotkeys are checked while the game window, overlay, or viewer console has focus.
 | `F6` | Toggle stale throw boxes |
 | `F7` | Toggle gauge overlays |
 | `F8` | Toggle the KOF98 keyboard input display |
-| `F9` | Toggle KOF98 input transition logging in the console |
+| `F9` | Toggle KOF98 rhythm graph, input logging, and Shermie command practice |
 | `Q` | Exit when pressed in the viewer console |
 
 The x64 KOF 2002 UM profile supports the range markers and player hitboxes. Gauge or projectile overlays depend on game support and configuration.
 
-For KOF98 UM Final Edition, the input display reads both players' keyboard bindings from the game's `Data\~options.bin` file when the viewer starts. It converts the saved scan codes to keyboard keys and shows a live directional pad, attack buttons, and recent input changes. Attack buttons use the KOF mapping `A=LP`, `B=LK`, `C=SP`, `D=SK`, even though the saved preset lists them as `LP/SP/LK/SK`. Press `F8` to hide or show the display. Press `F9` for a rhythm graph and timing log: the graph shows about 1.15 seconds, with rows for up/back/down/forward/A/B/C/D and the newest sample at the right; console entries report how long each state was held before the next state. Logging only runs while the game window is active and waits for all mapped keys to be released after focus returns. Restart the viewer after changing keyboard bindings in the game.
+For KOF98 UM Final Edition, the input display reads both players' keyboard bindings from the game's `Data\~options.bin` file when the viewer starts. It converts the saved scan codes to keyboard keys and shows a live directional pad, attack buttons, and recent input changes. Attack buttons use the KOF mapping `A=LP`, `B=LK`, `C=SP`, `D=SK`, even though the saved preset lists them as `LP/SP/LK/SK`. Press `F8` to hide or show the display. Press `F9` for a rhythm graph and timing log: the graph shows about 1.15 seconds, with rows for up/back/down/forward/A/B/C/D and the newest sample at the right; console entries report how long each state was held before the next state. F9 also prints Shermie's move list and recognizes P1's command motions; a detected command is named in the console and gives a brief green feedback bar above P1's graph. Directions are converted to forward/back using the character's current facing. This checks the command motion from keyboard input, not whether the character is close enough or the target is in range/airborne, so throws and anti-air moves can still need the right in-game situation. The coach assumes P1 is normal Shermie. Logging only runs while the game window is active and waits for all mapped keys to be released after focus returns. Restart the viewer after changing keyboard bindings in the game.
 
 ## Box colors
 

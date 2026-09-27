@@ -61,7 +61,7 @@ KOF98.toggleHotkeys = {
 	{ hotkey.VK_F6, "drawStaleThrowBoxes", "drawing \"stale\" throw boxes" },
 	{ hotkey.VK_F7, "drawGauges", "drawing gauge overlays" },
 	{ hotkey.VK_F8, "drawInputDisplay", "drawing keyboard input display" },
-	{ hotkey.VK_F9, "logInputTransitions", "logging keyboard input changes" },
+	{ hotkey.VK_F9, "logInputTransitions", "Shermie command practice and rhythm logging" },
 }
 
 KOF98.drawInputDisplay = true
@@ -69,6 +69,9 @@ KOF98.logInputTransitions = false
 KOF98.inputHistoryLength = 12
 KOF98.inputTimelineLength = 72
 KOF98.inputTimelinePeriodMs = 16
+KOF98.shermieFeedbackDurationMs = 1000
+KOF98.shermieMotionWindowMs = 1200
+KOF98.shermieMotionStepWindowMs = 450
 
 KOF98.startupMessage = [[
 Hotkeys available for this game:
@@ -80,7 +83,7 @@ F5 - Toggle drawing "throwable"-type boxes
 F6 - Toggle drawing "stale" throw boxes
 F7 - Toggle gauge overlays
 F8 - Toggle keyboard input display
-F9 - Toggle keyboard rhythm graph and timing log]]
+F9 - Toggle rhythm graph, timing log, and Shermie command practice]]
 
 -- Each player keyboard block stores ten little-endian DirectInput scan codes:
 -- up/down/left/right, start/select, then LP/SP/LK/SK. Display order is A/B/C/D,
@@ -161,6 +164,7 @@ function KOF98:extraInit(noExport)
 	self.projBuffer = ffi.new("projectile")
 	self.inputHistory = { {}, {} }
 	self.inputFrames = { {}, {} }
+	self.motionHistory = { {}, {} }
 	self.lastInputState = { nil, nil }
 	self.lastInputTime = { nil, nil }
 	self.lastInputFrameTime = nil
@@ -390,12 +394,166 @@ end
 local inputColors = {
 	neutral = colors.rgb(0x60, 0x60, 0x60),
 	timeline = colors.rgb(0x38, 0x38, 0x38),
+	positive = colors.rgb(0x50, 0xFF, 0x80),
 	direction = colors.rgb(0xE8, 0xE8, 0xE8),
 	buttons = {
 		colors.rgb(0x70, 0xD8, 0xFF), colors.rgb(0xFF, 0xD5, 0x60),
 		colors.rgb(0xFF, 0x80, 0x80), colors.rgb(0xA0, 0xFF, 0x90),
 	},
 }
+
+local shermieMoveList = {
+	"SHERMIE - KOF '98 UM command practice (normal Shermie)",
+	"A=LP, B=LK, C=SP, D=SK; forward/back are relative to Shermie's facing.",
+	"Coach checks P1 keyboard commands; it cannot verify move animation or range.",
+	"Timing window: up to 450 ms between direction changes, 1200 ms total.",
+	"Throws (close; range cannot be checked from keyboard input):",
+	"  Shermie Flash Original: back or forward + C (SP)",
+	"  Front Flash: back or forward + D (SK)",
+	"Command attack:",
+	"  Shermie Stand: forward + B (LK)",
+	"Special moves:",
+	"  Shermie Spiral: HCF + A/C (LP/SP), close",
+	"  Shermie Shoot: HCF + B/D (LK/SK)",
+	"  Shermie Whip: QCB + A/C (LP/SP), close",
+	"  Axle Spinning Kick: QCB + B/D (LK/SK)",
+	"  Shermie Clutch: DP + B/D (LK/SK), anti-air target",
+	"  Shermie Cute: QCF + B/D after Spiral, Whip, or Clutch",
+	"Desperation moves (close):",
+	"  Shermie Carnival: HCF, HCF + A/C (LP/SP)",
+	"  Shermie Flash: HCB, HCB + A/C (LP/SP)",
+}
+
+local function printShermieMoveList()
+	for _, line in ipairs(shermieMoveList) do io.write(line, "\n") end
+end
+
+local function directionName(mask)
+	local direction = bit.band(mask, 0x0F)
+	if direction == 0 then return nil end
+	local names = {
+		[1] = "up", [2] = "down", [4] = "back", [8] = "forward",
+		[5] = "upback", [9] = "upforward", [6] = "downback",
+		[10] = "downforward",
+	}
+	return names[direction]
+end
+
+local function recordMotionDirection(self, which, direction, now)
+	if not direction then return end
+	local history = self.motionHistory[which]
+	local last = history[#history]
+	local elapsed = last and (now - last.time) or 0
+	if elapsed < 0 then elapsed = elapsed + 0x100000000 end
+	if last and elapsed > self.shermieMotionStepWindowMs then
+		for i = #history, 1, -1 do history[i] = nil end
+	end
+	table.insert(history, { name = direction, time = now })
+	while #history > 20 do table.remove(history, 1) end
+end
+
+local function motionMatches(self, which, pattern, now)
+	local history = self.motionHistory[which]
+	if #history < #pattern then return false end
+	local first = #history - #pattern + 1
+	for i, direction in ipairs(pattern) do
+		if history[first + i - 1].name ~= direction then return false end
+	end
+	local elapsed = now - history[#history].time
+	if elapsed < 0 then elapsed = elapsed + 0x100000000 end
+	local span = now - history[first].time
+	if span < 0 then span = span + 0x100000000 end
+	return elapsed <= self.shermieMotionStepWindowMs
+		and span <= self.shermieMotionWindowMs
+end
+
+local hcf = { "back", "downback", "down", "downforward", "forward" }
+local hcb = { "forward", "downforward", "down", "downback", "back" }
+local qcb = { "down", "downback", "back" }
+local qcf = { "down", "downforward", "forward" }
+local dp = { "forward", "down", "downforward" }
+local function doubled(pattern)
+	local result = {}
+	for _, direction in ipairs(pattern) do table.insert(result, direction) end
+	for _, direction in ipairs(pattern) do table.insert(result, direction) end
+	return result
+end
+
+local shermieCommandPatterns = {
+	{ name = "Shermie Carnival", motion = doubled(hcf), buttons = { 16, 64 }, close = true },
+	{ name = "Shermie Flash (DM)", motion = doubled(hcb), buttons = { 16, 64 }, close = true },
+	{ name = "Shermie Spiral", motion = hcf, buttons = { 16, 64 }, close = true, followup = true },
+	{ name = "Shermie Shoot", motion = hcf, buttons = { 32, 128 } },
+	{ name = "Shermie Whip", motion = qcb, buttons = { 16, 64 }, close = true, followup = true },
+	{ name = "Axle Spinning Kick", motion = qcb, buttons = { 32, 128 } },
+	{ name = "Shermie Clutch", motion = dp, buttons = { 32, 128 }, followup = true },
+	{ name = "Shermie Cute", motion = qcf, buttons = { 32, 128 }, followupOnly = true },
+}
+
+local function hasOneOfButtons(mask, buttons)
+	for _, button in ipairs(buttons) do
+		if bit.band(mask, button) ~= 0 then return true end
+	end
+	return false
+end
+
+local function ticksElapsed(now, thenTime)
+	local elapsed = now - thenTime
+	if elapsed < 0 then elapsed = elapsed + 0x100000000 end
+	return elapsed
+end
+
+function KOF98:checkShermieMove(which, mask, now)
+	if which ~= 1 then return end
+	local direction = directionName(mask)
+	local buttons = bit.band(mask, 0xF0)
+	if not direction or buttons == 0 then return end
+
+	-- Pick the longest matching motion first so a super does not also report its
+	-- final half-circle as a regular special move.
+	for _, move in ipairs(shermieCommandPatterns) do
+		if hasOneOfButtons(buttons, move.buttons)
+			and direction == move.motion[#move.motion]
+			and motionMatches(self, which, move.motion, now) then
+			local eligible = true
+			if move.followupOnly then
+				eligible = self.shermieFollowupUntil ~= nil
+					and ticksElapsed(now, self.shermieFollowupUntil) <= 2000
+			end
+			if eligible then
+				self.shermieFeedbackStart = now
+				self.shermieFeedbackName = move.name
+				io.write("\nCorrect input: ", move.name,
+					move.close and " (close range required)" or "", "\n")
+				if move.followup then
+					self.shermieFollowupUntil = now
+				else
+					self.shermieFollowupUntil = nil
+				end
+				return
+			end
+		end
+	end
+
+	if direction == "forward" and bit.band(buttons, 32) ~= 0 then
+		self.shermieFollowupUntil = nil
+		self.shermieFeedbackStart = now
+		self.shermieFeedbackName = "Shermie Stand"
+		io.write("\nCorrect input: Shermie Stand\n")
+	elseif (direction == "back" or direction == "forward")
+		and bit.band(buttons, 64) ~= 0 then
+		self.shermieFollowupUntil = nil
+		self.shermieFeedbackStart = now
+		self.shermieFeedbackName = "Shermie Flash Original (close throw)"
+		io.write("\nInput matches Shermie Flash Original; close range is required.\n")
+	elseif (direction == "back" or direction == "forward")
+		and bit.band(buttons, 128) ~= 0 then
+		self.shermieFollowupUntil = nil
+		self.shermieFeedbackStart = now
+		self.shermieFeedbackName = "Front Flash (close throw)"
+		io.write("\nInput matches Front Flash; close range is required.\n")
+	end
+end
 
 function KOF98:readKeyboardInput(which)
 	local binding, pressed = self.inputBindings[which], hotkey.down
@@ -469,6 +627,8 @@ function KOF98:updateInputState()
 		self.lastInputTime[1], self.lastInputTime[2] = nil, nil
 		self.lastInputFrameTime = nil
 		self.inputFrames = { {}, {} }
+		self.motionHistory = { {}, {} }
+		self.shermieFollowupUntil = nil
 		return
 	end
 	if not self.inputCaptureActive then
@@ -495,6 +655,12 @@ function KOF98:updateInputState()
 				io.write(string.format("P%d: %s held %d ms -> %s\n",
 					which, self:describeInputState(last), elapsed,
 					self:describeInputState(masks[which])))
+			end
+			if last == nil or bit.band(last, 0x0F) ~= bit.band(masks[which], 0x0F) then
+				recordMotionDirection(self, which, directionName(masks[which]), now)
+			end
+			if self.logInputTransitions then
+				self:checkShermieMove(which, masks[which], now)
 			end
 			self.lastInputState[which] = masks[which]
 			self.lastInputTime[which] = now
@@ -540,6 +706,15 @@ function KOF98:renderInputTimeline()
 			end
 		end
 	end
+	if self.shermieFeedbackStart then
+		local elapsed = ticksElapsed(hotkey.ticks(), self.shermieFeedbackStart)
+		local remaining = self.shermieFeedbackDurationMs - elapsed
+		if remaining > 0 then
+			local feedbackWidth = width * remaining / self.shermieFeedbackDurationMs
+			self:horzLine(xPositions[1], xPositions[1] + feedbackWidth,
+				y - 2, inputColors.positive)
+		end
+	end
 end
 
 function KOF98:renderInputDisplay()
@@ -582,11 +757,14 @@ function KOF98:checkInputs()
 			self:toggleState(toggleKey[2], toggleKey[3])
 			if toggleKey[2] == "logInputTransitions" then
 				self.inputFrames = { {}, {} }
+				self.motionHistory = { {}, {} }
 				self.inputCaptureActive = false
 				self.lastInputState[1], self.lastInputState[2] = nil, nil
 				self.lastInputTime[1], self.lastInputTime[2] = nil, nil
+				self.shermieFollowupUntil = nil
 				if self.logInputTransitions then
 					io.write("Rhythm graph: rows up/back/down/forward/A/B/C/D; each column ~16 ms, ticks ~240 ms apart, newest at right.\n")
+					printShermieMoveList()
 				end
 			end
 		end
