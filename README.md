@@ -15,7 +15,7 @@ Get the Windows build from the [Releases page](https://github.com/Rollingkeyboar
 3. Read the console window for game detection, configuration, and hotkey status.
 4. Keep the viewer running while playing. Press `Q` in its console window to exit.
 
-The overlay is positioned over the game window. For KOF 2002 UM, the recommended game resolution is **640×448** and **Screen Type B** (`Game Options → Graphic Settings`). Other resolutions may work, but scaling can make boxes appear thicker or less crisp.
+The overlay is positioned immediately above the game in the normal window order. Other applications can cover both the game and its overlay; the overlay does not stay on top of unrelated windows. For KOF 2002 UM, the recommended game resolution is **640×448** and **Screen Type B** (`Game Options → Graphic Settings`). Other resolutions may work, but scaling can make boxes appear thicker or less crisp.
 
 ## KOF 2002 UM Steam x64
 

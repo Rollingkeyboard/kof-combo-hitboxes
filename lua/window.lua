@@ -148,7 +148,6 @@ window.defaultWindowClass = {
 }
 window.createWindowExDefaults = {
 	dwExStyle = bit.bor(
-		window.WS_EX_TOPMOST,
 		window.WS_EX_TRANSPARENT,
 		window.WS_EX_LAYERED,
 		window.WS_EX_COMPOSITED),
@@ -230,13 +229,12 @@ function window.createOverlayWindow(
 	local overlayHwnd = C.CreateWindowExW(luautil.unpackKeys(
 		newWinOptions, window.createWindowExParamsOrder))
 	winerror.checkNotEqual(overlayHwnd, NULL)
-	-- Keep the transparent overlay above the game when the game regains focus,
-	-- without activating the overlay or stealing keyboard input.
-	local topmost = ffi.cast("HWND", -1)
-	local topmostFlags = bit.bor(
+	-- Keep the overlay directly above its game window in the normal z-order.
+	-- This lets other applications cover both windows and avoids global topmost.
+	local positionFlags = bit.bor(
 		window.SWP_NOMOVE, window.SWP_NOSIZE, window.SWP_NOACTIVATE)
 	winerror.checkNotZero(C.SetWindowPos(
-		overlayHwnd, topmost, 0, 0, 0, 0, topmostFlags))
+		overlayHwnd, gameHwnd, 0, 0, 0, 0, positionFlags))
 
 	-- LWA_COLORKEY must be explicitly disabled or the overlay
 	-- won't work (as of Windows 10 Creators Update)
@@ -343,12 +341,11 @@ function window.move(
 	local sizeSource = (resize and source) or target
 	local newW, newH = window.getDimensions(sizeSource, rectBuffer)
 	newW, newH = max(newW, 1), max(newH, 1)
-	-- Keep the overlay in the topmost band every time it follows the game.
+	-- Place the overlay immediately above the game without making it topmost.
 	-- SWP_NOACTIVATE leaves keyboard focus with the game while its window moves.
-	local topmost = ffi.cast("HWND", -1)
 	local flags = window.SWP_NOACTIVATE
 	local result = C.SetWindowPos(
-		target, topmost, newX, newY, newW, newH, flags)
+		target, source, newX, newY, newW, newH, flags)
 	winerror.checkNotZero(result)
 	return result, newX, newY, newW, newH
 end
