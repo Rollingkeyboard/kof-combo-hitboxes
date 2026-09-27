@@ -78,8 +78,8 @@ F7 - Toggle gauge overlays
 F8 - Toggle keyboard input display]]
 
 -- Each player keyboard block stores ten little-endian DirectInput scan codes:
--- up/down/left/right, start/select, then A/B/C/D. We read the four directions
--- and four attacks from the saved options file, skipping start/select.
+-- up/down/left/right, start/select, then LP/SP/LK/SK. Display order is A/B/C/D,
+-- which maps to LP/LK/SP/SK, so the two middle attack slots are swapped below.
 local inputPresetOffsets = { 0x0C, 0x8C }
 local inputBindingSlots = { 0, 1, 2, 3, 6, 7, 8, 9 }
 
@@ -106,7 +106,7 @@ local function readInputPreset(path)
 		end
 		bindings[player] = {
 			up = keys[0], down = keys[1], left = keys[2], right = keys[3],
-			buttons = { keys[6], keys[7], keys[8], keys[9] },
+			buttons = { keys[6], keys[8], keys[7], keys[9] },
 		}
 	end
 	local mappedKeys = 0

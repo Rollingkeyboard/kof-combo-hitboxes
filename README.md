@@ -41,7 +41,7 @@ Hotkeys are checked while the game window, overlay, or viewer console has focus.
 
 The x64 KOF 2002 UM profile supports the range markers and player hitboxes. Gauge or projectile overlays depend on game support and configuration.
 
-For KOF98 UM Final Edition, the input display reads both players' keyboard bindings from the game's `Data\~options.bin` file when the viewer starts. It converts the saved scan codes to keyboard keys and shows a live directional pad, attack buttons, and recent input changes. Press `F8` to hide or show it. Restart the viewer after changing keyboard bindings in the game.
+For KOF98 UM Final Edition, the input display reads both players' keyboard bindings from the game's `Data\~options.bin` file when the viewer starts. It converts the saved scan codes to keyboard keys and shows a live directional pad, attack buttons, and recent input changes. Attack buttons use the KOF mapping `A=LP`, `B=LK`, `C=SP`, `D=SK`, even though the saved preset lists them as `LP/SP/LK/SK`. Press `F8` to hide or show it. Restart the viewer after changing keyboard bindings in the game.
 
 ## Box colors
 
