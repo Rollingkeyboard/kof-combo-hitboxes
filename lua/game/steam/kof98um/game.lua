@@ -60,7 +60,11 @@ KOF98.toggleHotkeys = {
 	{ hotkey.VK_F5, "drawThrowableBoxes", "drawing \"throwable\" boxes" },
 	{ hotkey.VK_F6, "drawStaleThrowBoxes", "drawing \"stale\" throw boxes" },
 	{ hotkey.VK_F7, "drawGauges", "drawing gauge overlays" },
+	{ hotkey.VK_F8, "drawInputDisplay", "drawing keyboard input display" },
 }
+
+KOF98.drawInputDisplay = true
+KOF98.inputHistoryLength = 12
 
 KOF98.startupMessage = [[
 Hotkeys available for this game:
@@ -70,7 +74,71 @@ F3 - Toggle drawing hitbox fills
 F4 - Toggle drawing hitbox center axes
 F5 - Toggle drawing "throwable"-type boxes
 F6 - Toggle drawing "stale" throw boxes
-F7 - Toggle gauge overlays]]
+F7 - Toggle gauge overlays
+F8 - Toggle keyboard input display]]
+
+-- Each player keyboard block stores ten little-endian DirectInput scan codes:
+-- up/down/left/right, start/select, then A/B/C/D. We read the four directions
+-- and four attacks from the saved options file, skipping start/select.
+local inputPresetOffsets = { 0x0C, 0x8C }
+local inputBindingSlots = { 0, 1, 2, 3, 6, 7, 8, 9 }
+
+local function readInputPreset(path)
+	local file, err = io.open(path, "rb")
+	if not file then return nil, err end
+	local data = file:read("*a")
+	file:close()
+	local function scanCodeAt(offset)
+		if offset + 4 > #data then return nil end
+		local b1, b2, b3, b4 = data:byte(offset + 1, offset + 4)
+		local scanCode = b1 + b2 * 0x100 + b3 * 0x10000 + b4 * 0x1000000
+		if scanCode == 0 or scanCode > 0xFF then return nil end
+		local vk = hotkey.fromScanCode(scanCode)
+		if vk == 0 then return nil end
+		return vk
+	end
+	local bindings = {}
+	for player = 1, 2 do
+		local base = inputPresetOffsets[player]
+		local keys = {}
+		for _, slot in ipairs(inputBindingSlots) do
+			keys[slot] = scanCodeAt(base + slot * 4)
+		end
+		bindings[player] = {
+			up = keys[0], down = keys[1], left = keys[2], right = keys[3],
+			buttons = { keys[6], keys[7], keys[8], keys[9] },
+		}
+	end
+	local mappedKeys = 0
+	for player = 1, 2 do
+		local binding = bindings[player]
+		for _, key in pairs({ binding.up, binding.down, binding.left,
+			binding.right, binding.buttons[1], binding.buttons[2],
+			binding.buttons[3], binding.buttons[4] }) do
+			if key then mappedKeys = mappedKeys + 1 end
+		end
+	end
+	if mappedKeys == 0 then return nil, "No direction or attack keys are assigned." end
+	return bindings
+end
+
+function KOF98:loadKeyboardInputPreset()
+	local exePath = window.getProcessImageName(self.gameHandle)
+	local gameDirectory = exePath:match("^(.*)[\\/]")
+	if not gameDirectory then
+		io.write("Could not locate the KOF98 game folder; keyboard input display is unavailable.\n")
+		return
+	end
+	local path = gameDirectory .. "\\Data\\~options.bin"
+	local bindings, err = readInputPreset(path)
+	if not bindings then
+		io.write("Could not load keyboard preset from Data\\~options.bin: ",
+			tostring(err), "\n")
+		return
+	end
+	self.inputBindings = bindings
+	io.write("Loaded keyboard preset from Data\\~options.bin for both players.\n")
+end
 
 function KOF98:extraInit(noExport)
 	if not noExport then
@@ -86,6 +154,9 @@ function KOF98:extraInit(noExport)
 		"pivots", self.projectilesListInfo.count + 2,
 		self.pivotSlotConstructor)
 	self.projBuffer = ffi.new("projectile")
+	self.inputHistory = { {}, {} }
+	self.lastInputState = { nil, nil }
+	self:loadKeyboardInputPreset()
 
 	luautil.ifNotEmpty(self.startupMessage)
 	for which = 1, 2 do
@@ -298,6 +369,84 @@ function KOF98:renderState()
 			end
 			if self.drawGuardGauge then
 				gauges.guard:render(p.guardGauge)
+			end
+		end
+	end
+	if self.drawInputDisplay and self.inputBindings then
+		self:renderInputDisplay()
+	end
+end
+
+local inputColors = {
+	neutral = colors.rgb(0x60, 0x60, 0x60),
+	direction = colors.rgb(0xE8, 0xE8, 0xE8),
+	buttons = {
+		colors.rgb(0x70, 0xD8, 0xFF), colors.rgb(0xFF, 0xD5, 0x60),
+		colors.rgb(0xFF, 0x80, 0x80), colors.rgb(0xA0, 0xFF, 0x90),
+	},
+}
+
+function KOF98:readKeyboardInput(which)
+	local binding, pressed = self.inputBindings[which], hotkey.down
+	local mask = 0
+	if binding.up and pressed(binding.up) then mask = bit.bor(mask, 1) end
+	if binding.down and pressed(binding.down) then mask = bit.bor(mask, 2) end
+	if binding.left and pressed(binding.left) then mask = bit.bor(mask, 4) end
+	if binding.right and pressed(binding.right) then mask = bit.bor(mask, 8) end
+	for i = 1, 4 do
+		local key = binding.buttons[i]
+		if key and pressed(key) then
+			mask = bit.bor(mask, bit.lshift(1, i + 3))
+		end
+	end
+	return mask
+end
+
+function KOF98:renderInputGlyph(mask, x, y, size)
+	local active = inputColors.direction
+	local inactive = inputColors.neutral
+	local function cell(cx, cy, bitMask, color)
+		local c = bit.band(mask, bitMask) ~= 0 and color or inactive
+		self:box(cx, cy, cx + size, cy + size, c, c)
+	end
+	-- A compact D-pad; positions themselves communicate direction.
+	cell(x + size, y, 1, active)
+	cell(x + size, y + size * 2, 2, active)
+	cell(x, y + size, 4, active)
+	cell(x + size * 2, y + size, 8, active)
+	local bx = x + size * 4
+	for i = 1, 4 do
+		local c = bit.band(mask, bit.lshift(1, i + 3)) ~= 0
+			and inputColors.buttons[i] or inactive
+		self:box(bx + (i - 1) * (size + 2), y + size,
+			bx + (i - 1) * (size + 2) + size, y + size * 2, c, c)
+	end
+end
+
+function KOF98:renderInputDisplay()
+	local history, length = self.inputHistory, self.inputHistoryLength
+	for which = 1, 2 do
+		local mask = self:readKeyboardInput(which)
+		local last = self.lastInputState[which]
+		if last == nil or mask ~= last then
+			local row = history[which]
+			table.insert(row, 1, mask)
+			if #row > length then table.remove(row) end
+			self.lastInputState[which] = mask
+		end
+		local x = (which == 1) and 8 or 264
+		local y = 22
+		self:renderInputGlyph(mask, x, y, 4)
+		-- Each column is one recent input change; rows run up/down/left/right/A/B/C/D.
+		for index, state in ipairs(history[which]) do
+			local hx, hy = x + (index - 1) * 4, y + 15
+			for row = 1, 8 do
+				local keyMask = bit.lshift(1, row - 1)
+				if bit.band(state, keyMask) ~= 0 then
+					local color = (row <= 4) and inputColors.direction
+						or inputColors.buttons[row - 4]
+					self:box(hx, hy + row - 1, hx + 3, hy + row, color, color)
+				end
 			end
 		end
 	end

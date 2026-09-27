@@ -5,6 +5,7 @@ local hotkey = {}
 ffi.cdef[[
 SHORT GetKeyState(int vKey);
 SHORT GetAsyncKeyState(int vKey);
+UINT MapVirtualKeyW(UINT uCode, UINT uMapType);
 ]]
 local C = ffi.C
 local KEY_DOWN = bit.lshift(1, 15)
@@ -33,6 +34,16 @@ function hotkey.released(vk)
 	if bit.band(result, KEY_DOWN) ~= 0 then return false end
 	if bit.band(result, KEY_TOGGLED) == 0 then return false end
 	return true
+end
+
+function hotkey.fromScanCode(scanCode)
+	-- MAPVK_VSC_TO_VK_EX maps DirectInput's physical scan codes to VKs.
+	-- DirectInput encodes E0-prefixed keys (arrows, keypad Enter, etc.) with
+	-- bit 7 set; Windows expects the E0 prefix in the high byte instead.
+	if scanCode >= 0x80 then
+		scanCode = 0xE000 + bit.band(scanCode, 0x7F)
+	end
+	return C.MapVirtualKeyW(scanCode, 3)
 end
 
 do

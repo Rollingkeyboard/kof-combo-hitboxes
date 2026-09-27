@@ -36,9 +36,12 @@ Hotkeys are checked while the game window, overlay, or viewer console has focus.
 | `F5` | Toggle throwable boxes |
 | `F6` | Toggle stale throw boxes |
 | `F7` | Toggle gauge overlays |
+| `F8` | Toggle the KOF98 keyboard input display |
 | `Q` | Exit when pressed in the viewer console |
 
 The x64 KOF 2002 UM profile supports the range markers and player hitboxes. Gauge or projectile overlays depend on game support and configuration.
+
+For KOF98 UM Final Edition, the input display reads both players' keyboard bindings from the game's `Data\~options.bin` file when the viewer starts. It converts the saved scan codes to keyboard keys and shows a live directional pad, attack buttons, and recent input changes. Press `F8` to hide or show it. Restart the viewer after changing keyboard bindings in the game.
 
 ## Box colors
 
