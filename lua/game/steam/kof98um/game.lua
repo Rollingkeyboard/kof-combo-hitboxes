@@ -434,13 +434,11 @@ function KOF98:renderInputGlyph(mask, x, y, size)
 	end
 end
 
-function KOF98:describeInputState(mask, which)
+function KOF98:describeInputState(mask)
 	local names = {}
-	local facingRight = self.players[which].facing ~= 0
 	local inputStateNames = {
 		{ 1, "up" }, { 2, "down" },
-		{ 4, facingRight and "back" or "forward" },
-		{ 8, facingRight and "forward" or "back" },
+		{ 4, "back" }, { 8, "forward" },
 		{ 16, "A" }, { 32, "B" }, { 64, "C" }, { 128, "D" },
 	}
 	for _, entry in ipairs(inputStateNames) do
@@ -495,8 +493,8 @@ function KOF98:updateInputState()
 				local elapsed = now - self.lastInputTime[which]
 				if elapsed < 0 then elapsed = elapsed + 0x100000000 end
 				io.write(string.format("P%d: %s held %d ms -> %s\n",
-					which, self:describeInputState(last, which), elapsed,
-					self:describeInputState(masks[which], which)))
+					which, self:describeInputState(last), elapsed,
+					self:describeInputState(masks[which])))
 			end
 			self.lastInputState[which] = masks[which]
 			self.lastInputTime[which] = now
