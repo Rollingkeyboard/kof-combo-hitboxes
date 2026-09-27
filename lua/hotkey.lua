@@ -6,6 +6,7 @@ ffi.cdef[[
 SHORT GetKeyState(int vKey);
 SHORT GetAsyncKeyState(int vKey);
 UINT MapVirtualKeyW(UINT uCode, UINT uMapType);
+DWORD GetTickCount(void);
 ]]
 local C = ffi.C
 local KEY_DOWN = bit.lshift(1, 15)
@@ -44,6 +45,10 @@ function hotkey.fromScanCode(scanCode)
 		scanCode = 0xE000 + bit.band(scanCode, 0x7F)
 	end
 	return C.MapVirtualKeyW(scanCode, 3)
+end
+
+function hotkey.ticks()
+	return C.GetTickCount()
 end
 
 do

@@ -61,9 +61,11 @@ KOF98.toggleHotkeys = {
 	{ hotkey.VK_F6, "drawStaleThrowBoxes", "drawing \"stale\" throw boxes" },
 	{ hotkey.VK_F7, "drawGauges", "drawing gauge overlays" },
 	{ hotkey.VK_F8, "drawInputDisplay", "drawing keyboard input display" },
+	{ hotkey.VK_F9, "logInputTransitions", "logging keyboard input changes" },
 }
 
 KOF98.drawInputDisplay = true
+KOF98.logInputTransitions = false
 KOF98.inputHistoryLength = 12
 
 KOF98.startupMessage = [[
@@ -75,7 +77,8 @@ F4 - Toggle drawing hitbox center axes
 F5 - Toggle drawing "throwable"-type boxes
 F6 - Toggle drawing "stale" throw boxes
 F7 - Toggle gauge overlays
-F8 - Toggle keyboard input display]]
+F8 - Toggle keyboard input display
+F9 - Toggle keyboard input diagnostics in this console]]
 
 -- Each player keyboard block stores ten little-endian DirectInput scan codes:
 -- up/down/left/right, start/select, then LP/SP/LK/SK. Display order is A/B/C/D,
@@ -156,6 +159,7 @@ function KOF98:extraInit(noExport)
 	self.projBuffer = ffi.new("projectile")
 	self.inputHistory = { {}, {} }
 	self.lastInputState = { nil, nil }
+	self.lastInputTime = { nil, nil }
 	self:loadKeyboardInputPreset()
 
 	luautil.ifNotEmpty(self.startupMessage)
@@ -372,8 +376,9 @@ function KOF98:renderState()
 			end
 		end
 	end
-	if self.drawInputDisplay and self.inputBindings then
-		self:renderInputDisplay()
+	if self.inputBindings then
+		self:updateInputState()
+		if self.drawInputDisplay then self:renderInputDisplay() end
 	end
 end
 
@@ -423,8 +428,26 @@ function KOF98:renderInputGlyph(mask, x, y, size)
 	end
 end
 
-function KOF98:renderInputDisplay()
+function KOF98:describeInputState(mask, which)
+	local names = {}
+	local facingRight = self.players[which].facing == 0
+	local inputStateNames = {
+		{ 1, "up" }, { 2, "down" },
+		{ 4, facingRight and "back" or "forward" },
+		{ 8, facingRight and "forward" or "back" },
+		{ 16, "A" }, { 32, "B" }, { 64, "C" }, { 128, "D" },
+	}
+	for _, entry in ipairs(inputStateNames) do
+		if bit.band(mask, entry[1]) ~= 0 then
+			table.insert(names, entry[2])
+		end
+	end
+	return (#names > 0 and table.concat(names, "+")) or "released"
+end
+
+function KOF98:updateInputState()
 	local history, length = self.inputHistory, self.inputHistoryLength
+	local now = hotkey.ticks()
 	for which = 1, 2 do
 		local mask = self:readKeyboardInput(which)
 		local last = self.lastInputState[which]
@@ -432,8 +455,22 @@ function KOF98:renderInputDisplay()
 			local row = history[which]
 			table.insert(row, 1, mask)
 			if #row > length then table.remove(row) end
+			if last ~= nil and self.logInputTransitions then
+				local elapsed = now - self.lastInputTime[which]
+				if elapsed < 0 then elapsed = elapsed + 0x100000000 end
+				io.write(string.format("P%d input: %s (state changed after %d ms)\n",
+					which, self:describeInputState(mask, which), elapsed))
+			end
 			self.lastInputState[which] = mask
+			self.lastInputTime[which] = now
 		end
+	end
+end
+
+function KOF98:renderInputDisplay()
+	local history = self.inputHistory
+	for which = 1, 2 do
+		local mask = self.lastInputState[which] or 0
 		local x = (which == 1) and 8 or 264
 		local y = 22
 		self:renderInputGlyph(mask, x, y, 4)
