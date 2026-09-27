@@ -67,6 +67,8 @@ KOF98.toggleHotkeys = {
 KOF98.drawInputDisplay = true
 KOF98.logInputTransitions = false
 KOF98.inputHistoryLength = 12
+KOF98.inputTimelineLength = 72
+KOF98.inputTimelinePeriodMs = 16
 
 KOF98.startupMessage = [[
 Hotkeys available for this game:
@@ -78,7 +80,7 @@ F5 - Toggle drawing "throwable"-type boxes
 F6 - Toggle drawing "stale" throw boxes
 F7 - Toggle gauge overlays
 F8 - Toggle keyboard input display
-F9 - Toggle keyboard input diagnostics in this console]]
+F9 - Toggle keyboard rhythm graph and timing log]]
 
 -- Each player keyboard block stores ten little-endian DirectInput scan codes:
 -- up/down/left/right, start/select, then LP/SP/LK/SK. Display order is A/B/C/D,
@@ -158,8 +160,10 @@ function KOF98:extraInit(noExport)
 		self.pivotSlotConstructor)
 	self.projBuffer = ffi.new("projectile")
 	self.inputHistory = { {}, {} }
+	self.inputFrames = { {}, {} }
 	self.lastInputState = { nil, nil }
 	self.lastInputTime = { nil, nil }
+	self.lastInputFrameTime = nil
 	self.inputCaptureActive = false
 	self:loadKeyboardInputPreset()
 
@@ -385,6 +389,7 @@ end
 
 local inputColors = {
 	neutral = colors.rgb(0x60, 0x60, 0x60),
+	timeline = colors.rgb(0x38, 0x38, 0x38),
 	direction = colors.rgb(0xE8, 0xE8, 0xE8),
 	buttons = {
 		colors.rgb(0x70, 0xD8, 0xFF), colors.rgb(0xFF, 0xD5, 0x60),
@@ -446,6 +451,14 @@ function KOF98:describeInputState(mask, which)
 	return (#names > 0 and table.concat(names, "+")) or "released"
 end
 
+function KOF98:relativeInputMask(which, mask)
+	if self.players[which].facing == 0 then return mask end
+	local result = bit.band(mask, bit.bnot(0x0C))
+	if bit.band(mask, 0x04) ~= 0 then result = bit.bor(result, 0x08) end
+	if bit.band(mask, 0x08) ~= 0 then result = bit.bor(result, 0x04) end
+	return result
+end
+
 function KOF98:updateInputState()
 	local history, length = self.inputHistory, self.inputHistoryLength
 	local now = hotkey.ticks()
@@ -456,6 +469,8 @@ function KOF98:updateInputState()
 		self.inputCaptureActive = false
 		self.lastInputState[1], self.lastInputState[2] = nil, nil
 		self.lastInputTime[1], self.lastInputTime[2] = nil, nil
+		self.lastInputFrameTime = nil
+		self.inputFrames = { {}, {} }
 		return
 	end
 	if not self.inputCaptureActive then
@@ -464,10 +479,13 @@ function KOF98:updateInputState()
 		self.inputCaptureActive = true
 		self.lastInputState[1], self.lastInputState[2] = 0, 0
 		self.lastInputTime[1], self.lastInputTime[2] = now, now
+		self.lastInputFrameTime = now
 		return
 	end
+	local masks = {}
 	for which = 1, 2 do
 		local mask = self:readKeyboardInput(which)
+		masks[which] = mask
 		local last = self.lastInputState[which]
 		if last == nil or mask ~= last then
 			local row = history[which]
@@ -476,11 +494,52 @@ function KOF98:updateInputState()
 			if last ~= nil and self.logInputTransitions then
 				local elapsed = now - self.lastInputTime[which]
 				if elapsed < 0 then elapsed = elapsed + 0x100000000 end
-				io.write(string.format("P%d input: %s (state changed after %d ms)\n",
-					which, self:describeInputState(mask, which), elapsed))
+				io.write(string.format("P%d: %s held %d ms -> %s\n",
+					which, self:describeInputState(last, which), elapsed,
+					self:describeInputState(mask, which)))
 			end
 			self.lastInputState[which] = mask
 			self.lastInputTime[which] = now
+		end
+	end
+	if self.logInputTransitions and
+		now - self.lastInputFrameTime >= self.inputTimelinePeriodMs then
+		for which = 1, 2 do
+			local frames = self.inputFrames[which]
+			table.insert(frames, self:relativeInputMask(which, masks[which]))
+			if #frames > self.inputTimelineLength then table.remove(frames, 1) end
+		end
+		self.lastInputFrameTime = now
+	end
+end
+
+local inputTimelineBits = { 1, 4, 2, 8, 16, 32, 64, 128 }
+
+function KOF98:renderInputTimeline()
+	local xPositions, y, width = { 8, 168 }, 59, self.inputTimelineLength * 2
+	local rowPitch, cellHeight = 1.5, 1
+	for which = 1, 2 do
+		local x, frames = xPositions[which], self.inputFrames[which]
+		for row, keyMask in ipairs(inputTimelineBits) do
+			local ry = y + (row - 1) * rowPitch
+			self:horzLine(x, x + width, ry + cellHeight, inputColors.timeline)
+		end
+		-- Quarter-second ticks; each sampled column represents about 16 ms.
+		for tick = 1, 4 do
+			local tx = x + (tick * 15 * 2)
+			self:vertLine(y, y + 8 * rowPitch, tx, inputColors.timeline)
+		end
+		local emptyColumns = self.inputTimelineLength - #frames
+		for index, mask in ipairs(frames) do
+			local fx = x + (emptyColumns + index - 1) * 2
+			for row, keyMask in ipairs(inputTimelineBits) do
+				if bit.band(mask, keyMask) ~= 0 then
+					local color = (row <= 4) and inputColors.direction
+						or inputColors.buttons[row - 4]
+					local ry = y + (row - 1) * rowPitch
+					self:box(fx, ry, fx + 1.5, ry + cellHeight, color, color)
+				end
+			end
 		end
 	end
 end
@@ -505,6 +564,7 @@ function KOF98:renderInputDisplay()
 			end
 		end
 	end
+	if self.logInputTransitions then self:renderInputTimeline() end
 end
 
 function KOF98:toggleState(target, consoleLine)
@@ -522,6 +582,15 @@ function KOF98:checkInputs()
 	for _, toggleKey in ipairs(self.toggleHotkeys) do
 		if hotkey.pressed(toggleKey[1]) then
 			self:toggleState(toggleKey[2], toggleKey[3])
+			if toggleKey[2] == "logInputTransitions" then
+				self.inputFrames = { {}, {} }
+				self.inputCaptureActive = false
+				self.lastInputState[1], self.lastInputState[2] = nil, nil
+				self.lastInputTime[1], self.lastInputTime[2] = nil, nil
+				if self.logInputTransitions then
+					io.write("Rhythm graph: rows up/back/down/forward/A/B/C/D; each column ~16 ms, ticks ~240 ms apart, newest at right.\n")
+				end
+			end
 		end
 	end
 end
