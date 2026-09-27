@@ -436,7 +436,7 @@ end
 
 function KOF98:describeInputState(mask, which)
 	local names = {}
-	local facingRight = self.players[which].facing == 0
+	local facingRight = self.players[which].facing ~= 0
 	local inputStateNames = {
 		{ 1, "up" }, { 2, "down" },
 		{ 4, facingRight and "back" or "forward" },
@@ -452,7 +452,7 @@ function KOF98:describeInputState(mask, which)
 end
 
 function KOF98:relativeInputMask(which, mask)
-	if self.players[which].facing == 0 then return mask end
+	if self.players[which].facing ~= 0 then return mask end
 	local result = bit.band(mask, bit.bnot(0x0C))
 	if bit.band(mask, 0x04) ~= 0 then result = bit.bor(result, 0x08) end
 	if bit.band(mask, 0x08) ~= 0 then result = bit.bor(result, 0x04) end
@@ -485,20 +485,20 @@ function KOF98:updateInputState()
 	local masks = {}
 	for which = 1, 2 do
 		local mask = self:readKeyboardInput(which)
-		masks[which] = mask
+		masks[which] = self:relativeInputMask(which, mask)
 		local last = self.lastInputState[which]
-		if last == nil or mask ~= last then
+		if last == nil or masks[which] ~= last then
 			local row = history[which]
-			table.insert(row, 1, mask)
+			table.insert(row, 1, masks[which])
 			if #row > length then table.remove(row) end
 			if last ~= nil and self.logInputTransitions then
 				local elapsed = now - self.lastInputTime[which]
 				if elapsed < 0 then elapsed = elapsed + 0x100000000 end
 				io.write(string.format("P%d: %s held %d ms -> %s\n",
 					which, self:describeInputState(last, which), elapsed,
-					self:describeInputState(mask, which)))
+					self:describeInputState(masks[which], which)))
 			end
-			self.lastInputState[which] = mask
+			self.lastInputState[which] = masks[which]
 			self.lastInputTime[which] = now
 		end
 	end
@@ -506,7 +506,7 @@ function KOF98:updateInputState()
 		now - self.lastInputFrameTime >= self.inputTimelinePeriodMs then
 		for which = 1, 2 do
 			local frames = self.inputFrames[which]
-			table.insert(frames, self:relativeInputMask(which, masks[which]))
+			table.insert(frames, masks[which])
 			if #frames > self.inputTimelineLength then table.remove(frames, 1) end
 		end
 		self.lastInputFrameTime = now
