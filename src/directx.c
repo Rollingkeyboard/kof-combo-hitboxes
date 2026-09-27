@@ -13,6 +13,19 @@ LPDIRECT3DDEVICE9 d3dDevice;
 LPDIRECT3DVERTEXBUFFER9 boxBuffer;
 RECT scissorRect = { .right = (LONG)1, .bottom = (LONG)1 };
 D3DPRESENT_PARAMETERS presentParams;
+HWND d3dWindow;
+
+static void releaseD3DResources(void)
+{
+	if (boxBuffer) {
+		IDirect3DVertexBuffer9_Release(boxBuffer);
+		boxBuffer = NULL;
+	}
+	if (d3dDevice) {
+		IDirect3DDevice9_Release(d3dDevice);
+		d3dDevice = NULL;
+	}
+}
 
 CUSTOMVERTEX templateVertex = { 0.0f, 0.0f, 1.0f, 1.0f, D3DCOLOR_RGBA(0, 0, 0, 0) };
 
@@ -32,10 +45,9 @@ d3dRenderOption_t renderStateOptions[] = {
 	{ -1, -1 } // sentinel
 };
 
-HRESULT setupD3D(HWND hwnd, UINT w, UINT h)
+static HRESULT createD3DDevice(HWND hwnd, UINT w, UINT h)
 {
 	HRESULT result;
-	d3d = Direct3DCreate9(D3D_SDK_VERSION);
 	memset(&presentParams, 0, sizeof(presentParams));
 	presentParams.Windowed = TRUE;
 	presentParams.SwapEffect = D3DSWAPEFFECT_COPY;
@@ -82,6 +94,32 @@ HRESULT setupD3D(HWND hwnd, UINT w, UINT h)
 	return result;
 }
 
+HRESULT setupD3D(HWND hwnd, UINT w, UINT h)
+{
+	d3dWindow = hwnd;
+	d3d = Direct3DCreate9(D3D_SDK_VERSION);
+	if (!d3d) return D3DERR_NOTAVAILABLE;
+	return createD3DDevice(hwnd, w, h);
+}
+
+HRESULT resetD3D(void)
+{
+	if (!d3d || !d3dWindow) return D3DERR_INVALIDCALL;
+	if (d3dDevice) {
+		HRESULT state = IDirect3DDevice9_TestCooperativeLevel(d3dDevice);
+		if (state == D3DERR_DEVICELOST) return state;
+		if (state != D3DERR_DEVICENOTRESET && state != D3D_OK) return state;
+	}
+
+	// Recreating the device also recovers from driver-specific reset failures.
+	releaseD3DResources();
+	IDirect3D9_Release(d3d);
+	d3d = Direct3DCreate9(D3D_SDK_VERSION);
+	if (!d3d) return D3DERR_NOTAVAILABLE;
+	return createD3DDevice(d3dWindow,
+		presentParams.BackBufferWidth, presentParams.BackBufferHeight);
+}
+
 // Takes 3 arguments: HWND for which to set up Direct3D, device width/height
 // Returns 1 value: HRESULT from last D3D call made (stops at first failed call)
 static int l_setupD3D(lua_State *L)
@@ -90,6 +128,14 @@ static int l_setupD3D(lua_State *L)
 	UINT w = (UINT)luaL_checkint(L, 2);
 	UINT h = (UINT)luaL_checkint(L, 3);
 	HRESULT result = setupD3D(*hwnd, w, h);
+	lua_pushinteger(L, (lua_Integer)result);
+	return 1;
+}
+
+static int l_resetD3D(lua_State *L)
+{
+	(void)L;
+	HRESULT result = resetD3D();
 	lua_pushinteger(L, (lua_Integer)result);
 	return 1;
 }
@@ -246,6 +292,7 @@ static int l_endFrame(lua_State *L)
 
 const luaL_Reg lib_directX[] = {
 	{ "setupD3D", l_setupD3D },
+	{ "resetD3D", l_resetD3D },
 	{ "rect", l_DXRectangle },
 	{ "hitbox", l_drawHitbox },
 	{ "setScissor", l_setScissor },

@@ -21,4 +21,7 @@ typedef struct d3dRenderOption {
 
 extern const luaL_Reg lib_directX[];
 
+// Recreate the device after a display or window transition leaves it lost.
+HRESULT resetD3D(void);
+
 #endif /* DIRECTX_H */

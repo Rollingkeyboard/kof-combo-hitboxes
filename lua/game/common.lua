@@ -158,6 +158,16 @@ end
 function Game_Common:nextFrame(drawing, hasFocus)
 	if hasFocus then self:checkInputs() end
 	if not window.isWindow(self.gameHwnd) then return false end
+	if self.directXDeviceLost then
+		local resetResult = self.directx.resetD3D()
+		if resetResult == 0 then
+			self.directXDeviceLost = false
+			self.directXErrorReported = false
+			io.write("Direct3D device restored; hitbox drawing resumed.\n")
+		else
+			return true -- Keep polling while Windows/driver reports the device lost.
+		end
+	end
 	if drawing and self:shouldRenderFrame() then
 		self:repositionOverlay()
 		self.directx.beginFrame()
@@ -172,6 +182,10 @@ function Game_Common:nextFrame(drawing, hasFocus)
 		self.directXErrorReported = true
 		io.write("Direct3D frame presentation failed (HRESULT ",
 			tostring(result), ").\n")
+		if result == -2005530520 then -- D3DERR_DEVICELOST
+			self.directXDeviceLost = true
+			io.write("Waiting for the Direct3D device to become resettable.\n")
+		end
 	end
 	return true
 end
