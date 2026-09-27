@@ -160,6 +160,7 @@ function KOF98:extraInit(noExport)
 	self.inputHistory = { {}, {} }
 	self.lastInputState = { nil, nil }
 	self.lastInputTime = { nil, nil }
+	self.inputCaptureActive = false
 	self:loadKeyboardInputPreset()
 
 	luautil.ifNotEmpty(self.startupMessage)
@@ -448,6 +449,23 @@ end
 function KOF98:updateInputState()
 	local history, length = self.inputHistory, self.inputHistoryLength
 	local now = hotkey.ticks()
+	-- GetAsyncKeyState is system-wide, so accept samples only while the game
+	-- window is foreground. Require a neutral state after focus returns to avoid
+	-- treating a key held in another application as a game input.
+	if window.foreground() ~= self.gameHwnd then
+		self.inputCaptureActive = false
+		self.lastInputState[1], self.lastInputState[2] = nil, nil
+		self.lastInputTime[1], self.lastInputTime[2] = nil, nil
+		return
+	end
+	if not self.inputCaptureActive then
+		local p1, p2 = self:readKeyboardInput(1), self:readKeyboardInput(2)
+		if p1 ~= 0 or p2 ~= 0 then return end
+		self.inputCaptureActive = true
+		self.lastInputState[1], self.lastInputState[2] = 0, 0
+		self.lastInputTime[1], self.lastInputTime[2] = now, now
+		return
+	end
 	for which = 1, 2 do
 		local mask = self:readKeyboardInput(which)
 		local last = self.lastInputState[which]
