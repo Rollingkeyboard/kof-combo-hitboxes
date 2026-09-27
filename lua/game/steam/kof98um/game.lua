@@ -72,8 +72,8 @@ KOF98.inputTimelinePeriodMs = 16
 KOF98.shermieFeedbackDurationMs = 1000
 KOF98.shermieMotionWindowMs = 1200
 KOF98.shermieMotionStepWindowMs = 450
-KOF98.rhythmGuideBeatMs = 90
-KOF98.rhythmGuideToleranceMs = 75
+KOF98.rhythmGuideBeatMs = 70
+KOF98.rhythmGuideToleranceMs = 45
 
 KOF98.startupMessage = [[
 Hotkeys available for this game:
@@ -803,7 +803,7 @@ function KOF98:renderInputTimeline()
 		-- Use a single note lane attached to P1's existing input timeline.
 		local laneY = y + 8 * rowPitch + 3
 		local hitLineX = xPositions[1] + width * 0.7
-		local scrollPixelsPerMs = 0.1
+		local scrollPixelsPerMs = 0.035
 		local now = hotkey.ticks()
 		local elapsed = ticksElapsed(now, guide.start)
 		self:horzLine(xPositions[1], xPositions[1] + width,
@@ -827,7 +827,7 @@ function KOF98:renderInputTimeline()
 			if note then
 				local actualElapsed = ticksElapsed(now, note.time)
 				local actualX = hitLineX + actualElapsed * scrollPixelsPerMs
-				if actualX >= xPositions[1] and actualX <= xPositions[1] + width then
+				if actualX >= xPositions[1] and actualX <= hitLineX + 10 then
 					self:box(actualX - 2, laneY - 2, actualX + 2, laneY + 2,
 						note.color, note.color)
 				end
@@ -884,7 +884,7 @@ function KOF98:checkInputs()
 				self.shermieFollowupUntil = nil
 				if self.logInputTransitions then
 					io.write("Rhythm graph: rows up/back/down/forward/A/B/C/D; each column ~16 ms, ticks ~240 ms apart, newest at right.\n")
-					io.write("Shermie rhythm lane: back, down-back, down, down-forward, forward + B/D; target spacing about 90 ms.\n")
+					io.write("Shermie rhythm lane: back, down-back, down, down-forward, forward + B/D; target spacing about 70 ms.\n")
 					printShermieMoveList()
 				end
 			end
