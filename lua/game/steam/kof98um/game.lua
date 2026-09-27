@@ -30,8 +30,9 @@ KOF98.boxesPerLayer = 20
 KOF98.boxtypes = boxtypes
 KOF98.revisions = {
 	["Steam"] = {
-		playerPtrs = { 0x0170D000, 0x0170D200 },
-		playerExtraPtrs = { 0x01715600, 0x0171580C },
+		-- The current Steam x86 executable stores the live player blocks here.
+		playerPtrs = { 0x016CDF40, 0x016CE140 },
+		playerExtraPtrs = { 0x016D6540, 0x016D674C },
 		cameraPtr = 0x0180C938,
 		projectilesListInfo = { start = 0x01703000, count = 51, step = 0x200 },
 	},
@@ -121,7 +122,9 @@ end
 function KOF98:capturePlayerState(which)
 	local player = self.players[which]
 	self:read(self.playerPtrs[which], player)
-	self:read(self.playerExtraPtrs[which], self.playerExtras[which])
+	local extraAddress = player.kof98_extra
+	if extraAddress == 0 then extraAddress = self.playerExtraPtrs[which] end
+	self:read(extraAddress, self.playerExtras[which])
 	self:captureEntity(player, false)
 end
 

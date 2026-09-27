@@ -3,7 +3,6 @@ local types = require("winapi.types")
 local winutil = require("winutil")
 local detectgame = require("detectgame")
 local window = require("window")
-local hk = require("hotkey")
 
 ffi.cdef[[
 typedef struct tagMSG {
@@ -25,6 +24,7 @@ BOOL TranslateMessage(MSG *lpMsg);
 LRESULT DispatchMessageW(MSG *lpMsg);
 VOID Sleep(DWORD ms);
 int _kbhit(void);
+int _getch(void);
 ]]
 local C = ffi.C
 
@@ -73,14 +73,18 @@ function mainLoop(game)
 		hasFocus = fg == gameHwnd or fg == overlayHwnd or fg == consoleHwnd
 		running = game:nextFrame(drawing, hasFocus)
 		if not running then break end
-		if hasFocus then
-			if fg == game.consoleHwnd then
-				if hk.down(hk.VK_Q) then
-					winutil.flushConsoleInput()
-					io.write("\n")
-					running = false
-					break
-				end
+		-- Read from the viewer's console input queue. GetAsyncKeyState plus an
+		-- exact foreground-window comparison can miss Q when console focus shifts.
+		if C._kbhit() ~= 0 then
+			local key = C._getch()
+			-- _getch returns a prefix for extended keys; consume the scan code too.
+			if key == 0 or key == 224 then
+				C._getch()
+			elseif key == string.byte("q") or key == string.byte("Q") then
+				winutil.flushConsoleInput()
+				io.write("\n")
+				running = false
+				break
 			end
 		end
 		C.Sleep(5)
