@@ -100,6 +100,7 @@ window.WS_EX_LAYERED = 0x00080000
 window.WS_EX_COMPOSITED = 0x02000000
 window.SWP_NOSIZE = 0x0001
 window.SWP_NOMOVE = 0x0002
+window.SWP_NOZORDER = 0x0004
 window.SWP_NOACTIVATE = 0x0010
 -- bit masks for "dwFlags" parameter to SetLayeredWindowAttributes()
 window.LWA_COLORKEY = 0x01
@@ -224,17 +225,13 @@ function window.createOverlayWindow(
 		hi,
 		{ lpClassName = ffi.cast("LPCTSTR", atom),
 		nWidth = w, nHeight = h,
-		hWndParent = NULL, },
+		-- WS_POPUP uses hWndParent as its owner; this keeps the overlay
+		-- above the game while letting other applications cover both.
+		hWndParent = gameHwnd, },
 		windowOptions)
 	local overlayHwnd = C.CreateWindowExW(luautil.unpackKeys(
 		newWinOptions, window.createWindowExParamsOrder))
 	winerror.checkNotEqual(overlayHwnd, NULL)
-	-- Keep the overlay directly above its game window in the normal z-order.
-	-- This lets other applications cover both windows and avoids global topmost.
-	local positionFlags = bit.bor(
-		window.SWP_NOMOVE, window.SWP_NOSIZE, window.SWP_NOACTIVATE)
-	winerror.checkNotZero(C.SetWindowPos(
-		overlayHwnd, gameHwnd, 0, 0, 0, 0, positionFlags))
 
 	-- LWA_COLORKEY must be explicitly disabled or the overlay
 	-- won't work (as of Windows 10 Creators Update)
@@ -341,9 +338,8 @@ function window.move(
 	local sizeSource = (resize and source) or target
 	local newW, newH = window.getDimensions(sizeSource, rectBuffer)
 	newW, newH = max(newW, 1), max(newH, 1)
-	-- Place the overlay immediately above the game without making it topmost.
-	-- SWP_NOACTIVATE leaves keyboard focus with the game while its window moves.
-	local flags = window.SWP_NOACTIVATE
+	-- Preserve the owner-managed z-order; only move/resize the overlay.
+	local flags = bit.bor(window.SWP_NOACTIVATE, window.SWP_NOZORDER)
 	local result = C.SetWindowPos(
 		target, source, newX, newY, newW, newH, flags)
 	winerror.checkNotZero(result)
