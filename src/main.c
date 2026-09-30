@@ -26,6 +26,9 @@ int WINAPI WinMain(
 	// Create a visible console when launched from Explorer, as the original
 	// viewer expects users to read hotkeys and status there.
 	if (GetConsoleWindow() == NULL) AllocConsole();
+	// Lua source strings are UTF-8; make the Windows console decode stdout as UTF-8.
+	SetConsoleOutputCP(CP_UTF8);
+	SetConsoleCP(CP_UTF8);
 	SetConsoleTitleW(L"KoF Combo Hitbox Viewer 1.0.4 x64");
 	freopen("CONOUT$", "w", stdout);
 	freopen("CONOUT$", "w", stderr);

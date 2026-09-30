@@ -73,7 +73,7 @@ KOF98.commandCoachEnabled = false
 KOF98.inputHistoryLength = 12
 KOF98.inputTimelineLength = 72
 KOF98.inputTimelinePeriodMs = 16
-KOF98.shermieFeedbackDurationMs = 1000
+KOF98.shermieFeedbackDurationMs = 2000
 KOF98.shermieMotionWindowMs = 1200
 KOF98.shermieMotionStepWindowMs = 450
 KOF98.rhythmGuideBeatMs = 70
@@ -402,6 +402,7 @@ function KOF98:renderState()
 	if self.inputBindings then
 		self:updateInputState()
 		if self.drawInputDisplay then self:renderInputDisplay() end
+		if self.commandCoachEnabled then self:renderCommandFeedback() end
 	end
 end
 
@@ -442,6 +443,97 @@ local shermieMoveList = {
 	"  Shermie Carnival: HCF, HCF + A/C (LP/SP)",
 	"  Shermie Flash: HCB, HCB + A/C (LP/SP)",
 }
+
+local feedbackGlyphs = {
+	[" "] = { "000", "000", "000", "000", "000" },
+	A = { "010", "101", "111", "101", "101" }, B = { "110", "101", "110", "101", "110" },
+	C = { "011", "100", "100", "100", "011" }, D = { "110", "101", "101", "101", "110" },
+	E = { "111", "100", "110", "100", "111" }, F = { "111", "100", "110", "100", "100" },
+	G = { "011", "100", "101", "101", "011" }, H = { "101", "101", "111", "101", "101" },
+	I = { "111", "010", "010", "010", "111" }, J = { "001", "001", "001", "101", "010" },
+	K = { "101", "101", "110", "101", "101" }, L = { "100", "100", "100", "100", "111" },
+	M = { "101", "111", "111", "101", "101" }, N = { "101", "111", "111", "111", "101" },
+	O = { "010", "101", "101", "101", "010" }, P = { "110", "101", "110", "100", "100" },
+	Q = { "010", "101", "101", "111", "011" }, R = { "110", "101", "110", "101", "101" },
+	S = { "011", "100", "010", "001", "110" }, T = { "111", "010", "010", "010", "010" },
+	U = { "101", "101", "101", "101", "111" }, V = { "101", "101", "101", "101", "010" },
+	W = { "101", "101", "111", "111", "101" }, X = { "101", "101", "010", "101", "101" },
+	Y = { "101", "101", "010", "010", "010" }, Z = { "111", "001", "010", "100", "111" },
+	["0"] = { "111", "101", "101", "101", "111" }, ["1"] = { "010", "110", "010", "010", "111" },
+	["2"] = { "110", "001", "010", "100", "111" }, ["3"] = { "110", "001", "010", "001", "110" },
+	["4"] = { "101", "101", "111", "001", "001" }, ["5"] = { "111", "100", "110", "001", "110" },
+	["6"] = { "011", "100", "110", "101", "010" }, ["7"] = { "111", "001", "010", "010", "010" },
+	["8"] = { "010", "101", "010", "101", "010" }, ["9"] = { "010", "101", "011", "001", "110" },
+	[":"] = { "000", "010", "000", "010", "000" }, ["-"] = { "000", "000", "111", "000", "000" },
+	["/"] = { "001", "001", "010", "100", "100" }, ["."] = { "000", "000", "000", "000", "010" },
+	[","] = { "000", "000", "000", "010", "100" }, ["+"] = { "000", "010", "111", "010", "000" },
+	["("] = { "001", "010", "010", "010", "001" }, [")"] = { "100", "010", "010", "010", "100" },
+}
+
+local ticksElapsed
+
+local function feedbackName(name)
+	name = (name or ""):gsub("%s*%([^)]*%)", "")
+	name = name:upper():gsub("[^A-Z0-9: /%-%.]", ""):gsub("%s+", " ")
+	return name
+end
+
+local function fitFeedbackLine(text, maxCharacters)
+	if #text <= maxCharacters then return text end
+	return text:sub(1, maxCharacters - 3) .. "..."
+end
+
+function KOF98:renderCommandFeedback()
+	if not self.shermieFeedbackStart then return end
+	local elapsed = ticksElapsed(hotkey.ticks(), self.shermieFeedbackStart)
+	local remaining = self.shermieFeedbackDurationMs - elapsed
+	if remaining <= 0 then return end
+
+	local scale = 2
+	local current = fitFeedbackLine(feedbackName(self.commandFeedbackName), 34)
+	local lines = {
+		"OK: " .. current,
+		"INPUT: " .. (self.commandFeedbackInput or "BUTTON INPUT"),
+	}
+	if self.commandFeedbackNext and #self.commandFeedbackNext > 0 then
+		local nextName = table.concat(self.commandFeedbackNext, " / ")
+		local nextInput = table.concat(self.commandFeedbackNextInput or {}, " / ")
+		table.insert(lines, "NEXT: " .. feedbackName(nextName))
+		table.insert(lines, "NEXT INPUT: " .. (nextInput ~= "" and nextInput or "FOLLOW-UP"))
+	else
+		table.insert(lines, "NEXT: NO FOLLOW-UP DATA")
+	end
+	for index, text in ipairs(lines) do lines[index] = fitFeedbackLine(text, 72) end
+	local longest = math.max(#lines[1], #lines[2])
+	for index = 3, #lines do longest = math.max(longest, #lines[index]) end
+	local textWidth = (longest * 4 - 1) * scale
+	local x, y = math.floor((self.basicWidth - textWidth - 24) / 2), 78
+	local width, height = textWidth + 24, 10 + #lines * 11
+	local background = colors.rgba(5, 34, 18, 232)
+	self:box(x, y, x + width, y + height, inputColors.positive, background)
+	self:box(x + 2, y + 2, x + width - 2, y + 3,
+		inputColors.positive, inputColors.positive)
+
+	for lineIndex, text in ipairs(lines) do
+		local textX = math.floor((self.basicWidth - (#text * 4 - 1) * scale) / 2)
+		local textY = y + 5 + (lineIndex - 1) * 11
+		for index = 1, #text do
+			local glyph = feedbackGlyphs[text:sub(index, index)]
+			if glyph then
+				for row = 1, #glyph do
+					for col = 1, #glyph[row] do
+						if glyph[row]:sub(col, col) == "1" then
+							local gx = textX + ((index - 1) * 4 + col - 1) * scale
+							local gy = textY + (row - 1) * scale
+							self:box(gx, gy, gx + scale, gy + scale,
+								inputColors.positive, inputColors.positive)
+						end
+					end
+				end
+			end
+		end
+	end
+end
 
 local function printShermieMoveList()
 	for _, line in ipairs(shermieMoveList) do io.write(line, "\n") end
@@ -582,7 +674,7 @@ local function hasOneOfButtons(mask, buttons)
 	return false
 end
 
-local function ticksElapsed(now, thenTime)
+ticksElapsed = function(now, thenTime)
 	local elapsed = now - thenTime
 	if elapsed < 0 then elapsed = elapsed + 0x100000000 end
 	return elapsed
@@ -685,6 +777,31 @@ local function commandMotionMatches(self, which, pattern, direction, now)
 		and motionMatches(self, which, pattern, now)
 end
 
+local feedbackDirections = {
+	up = "UP", down = "DOWN", back = "BACK", forward = "FWD",
+	downback = "DOWN-BACK", downforward = "DOWN-FWD",
+	upback = "UP-BACK", upforward = "UP-FWD",
+}
+
+local feedbackButtons = {
+	[16] = "A (LP)", [32] = "B (LK)",
+	[64] = "C (SP)", [128] = "D (SK)",
+}
+
+local function commandInputNotation(move)
+	local parts = {}
+	for _, direction in ipairs(move.motion or {}) do
+		table.insert(parts, feedbackDirections[direction] or direction:upper())
+	end
+	local buttons = {}
+	for _, button in ipairs(move.buttons or {}) do
+		table.insert(buttons, feedbackButtons[button] or "BUTTON")
+	end
+	local buttonText = table.concat(buttons, "/")
+	if #parts == 0 then return buttonText end
+	return table.concat(parts, ", ") .. " + " .. buttonText
+end
+
 function KOF98:checkCommandMove(which, mask, now)
 	local direction = directionName(mask)
 	local buttons = bit.band(mask, 0xF0)
@@ -752,6 +869,18 @@ function KOF98:checkCommandMove(which, mask, now)
 		end
 		self.shermieFeedbackStart = now
 		self.shermieFeedbackName = selected.name
+		self.commandFeedbackName = selected.name
+		self.commandFeedbackNext = selected.next
+		self.commandFeedbackInput = commandInputNotation(selected)
+		self.commandFeedbackNextInput = {}
+		for _, nextName in ipairs(selected.next or {}) do
+			for _, nextMove in ipairs(byName[nextName] or {}) do
+				local notation = commandInputNotation(nextMove)
+				if not containsName(self.commandFeedbackNextInput, notation) then
+					table.insert(self.commandFeedbackNextInput, notation)
+				end
+			end
+		end
 		io.write("\nP", which, " (", characterName, ") correct input: ", selected.name,
 			selected.close and " (close range required)" or "", "\n")
 		if matchedFollowup and chain then
@@ -770,18 +899,27 @@ function KOF98:checkCommandMove(which, mask, now)
 		if self.commandFollowups then self.commandFollowups[which] = nil end
 		self.shermieFeedbackStart = now
 		self.shermieFeedbackName = "Shermie Stand"
+		self.commandFeedbackName = "Shermie Stand"
+		self.commandFeedbackNext = nil
+		self.commandFeedbackInput = "FWD + B (LK)"
 		io.write("\nP", which, " correct input: Shermie Stand\n")
 	elseif (direction == "back" or direction == "forward")
 		and characterName == "Shermie" and bit.band(buttons, 64) ~= 0 then
 		self.shermieFollowupUntil = nil
 		self.shermieFeedbackStart = now
 		self.shermieFeedbackName = "Shermie Flash Original (close throw)"
+		self.commandFeedbackName = "Shermie Flash Original"
+		self.commandFeedbackNext = nil
+		self.commandFeedbackInput = direction:upper() .. " + C (SP)"
 		io.write("\nP", which, " input matches Shermie Flash Original; close range is required.\n")
 	elseif (direction == "back" or direction == "forward")
 		and characterName == "Shermie" and bit.band(buttons, 128) ~= 0 then
 		self.shermieFollowupUntil = nil
 		self.shermieFeedbackStart = now
 		self.shermieFeedbackName = "Front Flash (close throw)"
+		self.commandFeedbackName = "Front Flash"
+		self.commandFeedbackNext = nil
+		self.commandFeedbackInput = direction:upper() .. " + D (SK)"
 		io.write("\nP", which, " input matches Front Flash; close range is required.\n")
 	end
 end
