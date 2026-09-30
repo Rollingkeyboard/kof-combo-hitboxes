@@ -8,6 +8,8 @@ local window = require("window")
 local hotkey = require("hotkey")
 local colors = require("render.colors")
 local types = require("game.steam.kof98um.types")
+local roster = require("game.steam.kof98um.roster")
+local kof98CommandPatterns = require("game.steam.kof98um.commands")
 local boxtypes = require("game.steam.kof98um.boxtypes")
 local BoxSet = require("game.boxset")
 local BoxList = require("game.boxlist")
@@ -61,11 +63,13 @@ KOF98.toggleHotkeys = {
 	{ hotkey.VK_F6, "drawStaleThrowBoxes", "drawing \"stale\" throw boxes" },
 	{ hotkey.VK_F7, "drawGauges", "drawing gauge overlays" },
 	{ hotkey.VK_F8, "drawInputDisplay", "drawing keyboard input display" },
-	{ hotkey.VK_F9, "logInputTransitions", "Shermie command practice and rhythm logging" },
+	{ hotkey.VK_F9, "logInputTransitions", "rhythm graph and input timing log" },
+	{ hotkey.VK_F10, "commandCoachEnabled", "character command validation mode" },
 }
 
 KOF98.drawInputDisplay = true
 KOF98.logInputTransitions = false
+KOF98.commandCoachEnabled = false
 KOF98.inputHistoryLength = 12
 KOF98.inputTimelineLength = 72
 KOF98.inputTimelinePeriodMs = 16
@@ -85,7 +89,8 @@ F5 - Toggle drawing "throwable"-type boxes
 F6 - Toggle drawing "stale" throw boxes
 F7 - Toggle gauge overlays
 F8 - Toggle keyboard input display
-F9 - Toggle rhythm graph, timing log, and Shermie command practice]]
+F9 - Toggle rhythm graph and input timing log
+F10 - Toggle character command validation mode]]
 
 -- Each player keyboard block stores ten little-endian DirectInput scan codes:
 -- up/down/left/right, start/select, then LP/SP/LK/SK. Display order is A/B/C/D,
@@ -167,6 +172,8 @@ function KOF98:extraInit(noExport)
 	self.inputHistory = { {}, {} }
 	self.inputFrames = { {}, {} }
 	self.motionHistory = { {}, {} }
+	self.commandFollowups = { nil, nil }
+	self.commandLatch = { nil, nil }
 	self.lastInputState = { nil, nil }
 	self.lastInputTime = { nil, nil }
 	self.lastInputFrameTime = nil
@@ -236,6 +243,11 @@ function KOF98:captureState()
 	for i = 1, 2 do 
 		if self.playersEnabled[i] then
 			self:capturePlayerState(i)
+		end
+	end
+	if self.commandCoachEnabled then
+		for i = 1, 2 do
+			if self.playersEnabled[i] then self:loadCommandSet(i) end
 		end
 	end
 	if self.projectilesEnabled then
@@ -485,17 +497,83 @@ local function doubled(pattern)
 	for _, direction in ipairs(pattern) do table.insert(result, direction) end
 	return result
 end
+local function joined(firstPattern, secondPattern)
+	local result = {}
+	for _, direction in ipairs(firstPattern) do table.insert(result, direction) end
+	for _, direction in ipairs(secondPattern) do table.insert(result, direction) end
+	return result
+end
 
 local shermieCommandPatterns = {
 	{ name = "Shermie Carnival", motion = doubled(hcf), buttons = { 16, 64 }, close = true },
 	{ name = "Shermie Flash (DM)", motion = doubled(hcb), buttons = { 16, 64 }, close = true },
-	{ name = "Shermie Spiral", motion = hcf, buttons = { 16, 64 }, close = true, followup = true },
+	{ name = "Shermie Spiral", motion = hcf, buttons = { 16, 64 }, close = true,
+		next = { "Shermie Cute" } },
 	{ name = "Shermie Shoot", motion = hcf, buttons = { 32, 128 } },
-	{ name = "Shermie Whip", motion = qcb, buttons = { 16, 64 }, close = true, followup = true },
+	{ name = "Shermie Whip", motion = qcb, buttons = { 16, 64 }, close = true,
+		next = { "Shermie Cute" } },
 	{ name = "Axle Spinning Kick", motion = qcb, buttons = { 32, 128 } },
-	{ name = "Shermie Clutch", motion = dp, buttons = { 32, 128 }, followup = true },
+	{ name = "Shermie Clutch", motion = dp, buttons = { 32, 128 },
+		next = { "Shermie Cute" } },
 	{ name = "Shermie Cute", motion = qcf, buttons = { 32, 128 }, followupOnly = true },
 }
+
+-- Motion entries are relative to the player's facing. Follow-up links describe
+-- the command tree, not a frame-perfect cancel window; the game guide does not
+-- publish those timings. Character IDs come from roster.lua and the live player
+-- block, so identical motions on different characters are not misidentified.
+local kyoCommandPatterns = {
+		{ name = "Hatsugane", motion = { "back" }, buttons = { 64 }, close = true },
+		{ name = "Hatsugane", motion = { "forward" }, buttons = { 64 }, close = true },
+		{ name = "Issetsu Seoi Nage", motion = { "back" }, buttons = { 128 }, close = true },
+		{ name = "Issetsu Seoi Nage", motion = { "forward" }, buttons = { 128 }, close = true },
+		{ name = "Geshiki: Goufu You", motion = { "forward" }, buttons = { 32 } },
+		{ name = "88 Shiki", motion = { "downforward" }, buttons = { 128 } },
+		{ name = "114 Shiki: Aragami (荒咬)", motion = qcf, buttons = { 16 },
+			next = { "128 Shiki: Konokizu (九伤)" } },
+		{ name = "128 Shiki: Konokizu (九伤)", motion = qcf, buttons = { 16, 64 },
+			next = { "127 Shiki: Yanosabi (八锖)" }, followupOnly = true },
+		{ name = "127 Shiki: Yanosabi (八锖)", motion = hcb, buttons = { 16, 64 },
+			next = { "Geshiki: Migiri Ugachi (砌穿)" }, followupOnly = true },
+		{ name = "127 Shiki: Yanosabi (八锖)", buttons = { 16, 64 },
+			next = { "Geshiki: Migiri Ugachi (砌穿)" }, followupOnly = true },
+		{ name = "Geshiki: Migiri Ugachi (砌穿)", buttons = { 16, 64 }, followupOnly = true },
+		{ name = "125 Shiki: Nanase (七濑)", buttons = { 32, 128 }, followupOnly = true },
+		{ name = "115 Shiki: Dokugami", motion = qcf, buttons = { 64 },
+			next = { "401 Shiki: Tsumi Yomi", "402 Shiki: Batsu Yomi" } },
+		{ name = "401 Shiki: Tsumi Yomi", motion = hcb, buttons = { 16, 64 },
+			next = { "402 Shiki: Batsu Yomi" }, followupOnly = true },
+		{ name = "402 Shiki: Batsu Yomi", motion = { "forward" }, buttons = { 16, 64 }, followupOnly = true },
+		{ name = "100 Shiki: Oniyaki", motion = dp, buttons = { 16, 64 } },
+		{ name = "212 Shiki: Kototsuki You", motion = hcb, buttons = { 32, 128 } },
+		{ name = "Nue Tsumi", motion = qcb, buttons = { 16, 64 } },
+		{ name = "Ura 108 Shiki: Orochi Nagi", motion = joined(qcb, hcf), buttons = { 16, 64 } },
+		{ name = "Saishu Kessen Ougi: Mu Shiki", motion = doubled(qcf), buttons = { 16, 64 } },
+}
+kof98CommandPatterns.Kyo = kyoCommandPatterns
+kof98CommandPatterns.Shermie = shermieCommandPatterns
+
+function KOF98:loadCommandSet(which)
+	local playerId = tonumber(self.players[which].currentCharID)
+	local characterName = roster[playerId]
+	local patterns = kof98CommandPatterns[characterName]
+	self.loadedCommandSetByPlayer = self.loadedCommandSetByPlayer or {}
+	if characterName and self.loadedCommandSetByPlayer[which] ~= characterName then
+		if self.loadedCommandSetByPlayer[which] then
+			self.motionHistory[which] = {}
+			if self.commandFollowups then self.commandFollowups[which] = nil end
+			if self.commandLatch then self.commandLatch[which] = nil end
+		end
+		self.loadedCommandSetByPlayer[which] = characterName
+		if patterns then
+			io.write(string.format("Loaded command set for P%d: %s (%d recognized inputs).\n",
+				which, characterName, #patterns))
+		else
+			io.write("No command set is available yet for P", which, ": ", characterName, ".\n")
+		end
+	end
+	return patterns, characterName
+end
 
 local function hasOneOfButtons(mask, buttons)
 	for _, button in ipairs(buttons) do
@@ -525,6 +603,11 @@ end
 
 function KOF98:updateShermieRhythmGuide(which, mask, previousMask, now)
 	if which ~= 1 then return end
+	local characterName = roster[tonumber(self.players[which].currentCharID)]
+	if characterName ~= "Shermie" then
+		self.shermieRhythmGuide = nil
+		return
+	end
 	local direction = directionName(mask)
 	local previousDirection = directionName(previousMask or 0)
 	local directionChanged = direction ~= nil and direction ~= previousDirection
@@ -585,55 +668,121 @@ function KOF98:updateShermieRhythmGuide(which, mask, previousMask, now)
 	end
 end
 
-function KOF98:checkShermieMove(which, mask, now)
-	if which ~= 1 then return end
+local function containsName(names, target)
+	for _, name in ipairs(names or {}) do
+		if name == target then return true end
+	end
+	return false
+end
+
+local function commandMotionMatches(self, which, pattern, direction, now)
+	if #pattern == 1 then
+		local history = self.motionHistory[which]
+		local last = history[#history]
+		return direction == pattern[1] and last and last.name == pattern[1]
+	end
+	return direction == pattern[#pattern]
+		and motionMatches(self, which, pattern, now)
+end
+
+function KOF98:checkCommandMove(which, mask, now)
 	local direction = directionName(mask)
 	local buttons = bit.band(mask, 0xF0)
+	local patterns, characterName = self:loadCommandSet(which)
 	if not direction or buttons == 0 then return end
+	if not patterns then return end
+	local byName = {}
+	for _, move in ipairs(patterns) do
+		byName[move.name] = byName[move.name] or {}
+		table.insert(byName[move.name], move)
+	end
 
-	-- Pick the longest matching motion first so a super does not also report its
-	-- final half-circle as a regular special move.
-	for _, move in ipairs(shermieCommandPatterns) do
-		if hasOneOfButtons(buttons, move.buttons)
-			and direction == move.motion[#move.motion]
-			and motionMatches(self, which, move.motion, now) then
-			local eligible = true
-			if move.followupOnly then
-				eligible = self.shermieFollowupUntil ~= nil
-					and ticksElapsed(now, self.shermieFollowupUntil) <= 2000
-			end
-			if eligible then
-				self.shermieFeedbackStart = now
-				self.shermieFeedbackName = move.name
-				io.write("\nCorrect input: ", move.name,
-					move.close and " (close range required)" or "", "\n")
-				if move.followup then
-					self.shermieFollowupUntil = now
-				else
-					self.shermieFollowupUntil = nil
+	-- Check the active move's allowed branches first, so a follow-up that shares
+	-- the same quarter-circle as a normal move is credited to the combo route.
+	local chain = self.commandFollowups and self.commandFollowups[which]
+	local selected
+	local matchedFollowup = false
+	if chain then
+		if ticksElapsed(now, chain.time) <= 2000 then
+			for _, name in ipairs(chain.names) do
+				for _, move in ipairs(byName[name] or {}) do
+					if move.followupOnly and hasOneOfButtons(buttons, move.buttons)
+						and ((move.motion and commandMotionMatches(self, which,
+							move.motion, direction, now))
+							or (not move.motion and directionName(mask) ~= nil)) then
+						selected = move
+						matchedFollowup = true
+						break
+					end
 				end
-				return
+				if selected then break end
 			end
+		end
+		if ticksElapsed(now, chain.time) > 2000 then
+			self.commandFollowups[which] = nil
+			chain = nil
 		end
 	end
 
-	if direction == "forward" and bit.band(buttons, 32) ~= 0 then
+	if not selected then
+		-- Longest motion wins, preventing a super's final motion segment from
+		-- also being reported as an ordinary special.
+		local bestMotionLength = 0
+		for _, move in ipairs(patterns) do
+			if hasOneOfButtons(buttons, move.buttons)
+				and move.motion
+				and (not move.followupOnly or (chain
+					and containsName(chain.names, move.name)))
+				and #move.motion > bestMotionLength
+				and commandMotionMatches(self, which, move.motion, direction, now) then
+				selected = move
+				bestMotionLength = #move.motion
+			end
+		end
+	end
+	if selected then
+		self.commandLatch = self.commandLatch or {}
+		if self.commandLatch[which] == selected.name then return end
+		self.commandLatch[which] = selected.name
+		self.commandFollowups = self.commandFollowups or {}
+		if #(selected.next or {}) > 0 then
+			self.commandFollowups[which] = { names = selected.next, time = now }
+		else
+			self.commandFollowups[which] = nil
+		end
+		self.shermieFeedbackStart = now
+		self.shermieFeedbackName = selected.name
+		io.write("\nP", which, " (", characterName, ") correct input: ", selected.name,
+			selected.close and " (close range required)" or "", "\n")
+		if matchedFollowup and chain then
+			io.write(string.format("Follow-up spacing: %d ms after the previous recognized move (measurement only).\n",
+				ticksElapsed(now, chain.time)))
+		end
+		if selected.next and #selected.next > 0 then
+			io.write("Next combo input: ", table.concat(selected.next, "  OR  "),
+				". Follow the game's cancel timing; the guide does not specify a fixed beat.\n")
+		end
+		return
+	end
+
+	if characterName == "Shermie" and direction == "forward" and bit.band(buttons, 32) ~= 0 then
 		self.shermieFollowupUntil = nil
+		if self.commandFollowups then self.commandFollowups[which] = nil end
 		self.shermieFeedbackStart = now
 		self.shermieFeedbackName = "Shermie Stand"
-		io.write("\nCorrect input: Shermie Stand\n")
+		io.write("\nP", which, " correct input: Shermie Stand\n")
 	elseif (direction == "back" or direction == "forward")
-		and bit.band(buttons, 64) ~= 0 then
+		and characterName == "Shermie" and bit.band(buttons, 64) ~= 0 then
 		self.shermieFollowupUntil = nil
 		self.shermieFeedbackStart = now
 		self.shermieFeedbackName = "Shermie Flash Original (close throw)"
-		io.write("\nInput matches Shermie Flash Original; close range is required.\n")
+		io.write("\nP", which, " input matches Shermie Flash Original; close range is required.\n")
 	elseif (direction == "back" or direction == "forward")
-		and bit.band(buttons, 128) ~= 0 then
+		and characterName == "Shermie" and bit.band(buttons, 128) ~= 0 then
 		self.shermieFollowupUntil = nil
 		self.shermieFeedbackStart = now
 		self.shermieFeedbackName = "Front Flash (close throw)"
-		io.write("\nInput matches Front Flash; close range is required.\n")
+		io.write("\nP", which, " input matches Front Flash; close range is required.\n")
 	end
 end
 
@@ -711,6 +860,8 @@ function KOF98:updateInputState()
 		self.inputFrames = { {}, {} }
 		self.motionHistory = { {}, {} }
 		self.shermieFollowupUntil = nil
+		self.commandFollowups = { nil, nil }
+		self.commandLatch = { nil, nil }
 		return
 	end
 	if not self.inputCaptureActive then
@@ -726,6 +877,9 @@ function KOF98:updateInputState()
 	for which = 1, 2 do
 		local mask = self:readKeyboardInput(which)
 		masks[which] = self:relativeInputMask(which, mask)
+		if bit.band(masks[which], 0xF0) == 0 and self.commandLatch then
+			self.commandLatch[which] = nil
+		end
 		local last = self.lastInputState[which]
 		if last == nil or masks[which] ~= last then
 			local row = history[which]
@@ -743,7 +897,9 @@ function KOF98:updateInputState()
 			end
 			if self.logInputTransitions then
 				self:updateShermieRhythmGuide(which, masks[which], last, now)
-				self:checkShermieMove(which, masks[which], now)
+			end
+			if self.commandCoachEnabled then
+				self:checkCommandMove(which, masks[which], now)
 			end
 			self.lastInputState[which] = masks[which]
 			self.lastInputTime[which] = now
@@ -882,10 +1038,22 @@ function KOF98:checkInputs()
 				self.lastInputState[1], self.lastInputState[2] = nil, nil
 				self.lastInputTime[1], self.lastInputTime[2] = nil, nil
 				self.shermieFollowupUntil = nil
+				self.commandFollowups = { nil, nil }
+				self.commandLatch = { nil, nil }
 				if self.logInputTransitions then
 					io.write("Rhythm graph: rows up/back/down/forward/A/B/C/D; each column ~16 ms, ticks ~240 ms apart, newest at right.\n")
-					io.write("Shermie rhythm lane: back, down-back, down, down-forward, forward + B/D; target spacing about 70 ms.\n")
-					printShermieMoveList()
+				end
+			elseif toggleKey[2] == "commandCoachEnabled" then
+				self.inputCaptureActive = false
+				self.lastInputState[1], self.lastInputState[2] = nil, nil
+				self.lastInputTime[1], self.lastInputTime[2] = nil, nil
+				self.commandFollowups = { nil, nil }
+				self.commandLatch = { nil, nil }
+				self.loadedCommandSetByPlayer = {}
+				if self.commandCoachEnabled then
+					io.write("Command validation mode enabled. Current P1/P2 characters will load their own command sets.\n")
+					io.write("Recognized commands and valid follow-ups will be shown in this console.\n")
+					io.write("Timing is measured between recognized follow-ups; exact cancel windows are move-specific.\n")
 				end
 			end
 		end
