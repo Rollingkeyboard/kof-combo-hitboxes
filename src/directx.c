@@ -1,5 +1,7 @@
 #include "directx.h"
 
+#include <stdint.h>
+
 #define CUSTOMFVF (D3DFVF_XYZRHW | D3DFVF_DIFFUSE)
 // slight overkill, but OK
 #define BOX_VERTEX_BUFFER_SIZE 100
@@ -7,6 +9,18 @@
 	if (result != D3D_OK) { \
 		goto done; \
 	}
+
+#define TEXTURE_METATABLE "directx.text_texture"
+
+typedef struct textTextureHandle {
+	LPDIRECT3DTEXTURE9 texture;
+} TEXTUREHANDLE;
+
+typedef struct texturedVertex {
+	FLOAT x, y, z, rhw;
+	D3DCOLOR color;
+	FLOAT u, v;
+} TEXTUREDVERTEX;
 
 LPDIRECT3D9 d3d;
 LPDIRECT3DDEVICE9 d3dDevice;
@@ -171,6 +185,187 @@ static int l_DXRectangle(lua_State *L)
 	return 1;
 }
 
+static int l_textTextureGc(lua_State *L)
+{
+	TEXTUREHANDLE *handle = (TEXTUREHANDLE*)luaL_checkudata(
+		L, 1, TEXTURE_METATABLE);
+	if (handle->texture) {
+		IDirect3DTexture9_Release(handle->texture);
+		handle->texture = NULL;
+	}
+	return 0;
+}
+
+// Rasterize UTF-8 text with the Windows system UI font into a managed D3D texture.
+static int l_createTextTexture(lua_State *L)
+{
+	const char *utf8 = luaL_checkstring(L, 1);
+	int width = luaL_checkint(L, 2);
+	int height = luaL_checkint(L, 3);
+	int fontSize = luaL_optint(L, 4, 20);
+	if (!d3dDevice || width <= 0 || height <= 0 || width > 2048
+		|| height > 2048 || fontSize < 8 || fontSize > 96) {
+		return luaL_error(L, "invalid text texture dimensions or font size");
+	}
+
+	int wideLength = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+	if (wideLength <= 0) return luaL_error(L, "invalid UTF-8 text");
+	WCHAR *wideText = (WCHAR*)HeapAlloc(GetProcessHeap(), 0,
+		(size_t)wideLength * sizeof(WCHAR));
+	if (!wideText) return luaL_error(L, "could not allocate text buffer");
+	MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wideText, wideLength);
+
+	HDC dc = CreateCompatibleDC(NULL);
+	BITMAPINFO bitmapInfo;
+	memset(&bitmapInfo, 0, sizeof(bitmapInfo));
+	bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	bitmapInfo.bmiHeader.biWidth = width;
+	bitmapInfo.bmiHeader.biHeight = -height;
+	bitmapInfo.bmiHeader.biPlanes = 1;
+	bitmapInfo.bmiHeader.biBitCount = 32;
+	bitmapInfo.bmiHeader.biCompression = BI_RGB;
+	void *dibPixels = NULL;
+	HBITMAP dib = dc ? CreateDIBSection(dc, &bitmapInfo, DIB_RGB_COLORS,
+		&dibPixels, NULL, 0) : NULL;
+	HGDIOBJ oldBitmap = (dc && dib) ? SelectObject(dc, dib) : NULL;
+	HFONT font = CreateFontW(-fontSize, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE,
+		FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+	HGDIOBJ oldFont = (dc && font) ? SelectObject(dc, font) : NULL;
+	if (!dc || !dib || !dibPixels || !font || !oldBitmap || !oldFont) {
+		if (oldFont) SelectObject(dc, oldFont);
+		if (oldBitmap) SelectObject(dc, oldBitmap);
+		if (font) DeleteObject(font);
+		if (dib) DeleteObject(dib);
+		if (dc) DeleteDC(dc);
+		HeapFree(GetProcessHeap(), 0, wideText);
+		return luaL_error(L, "could not create system-font text bitmap");
+	}
+
+	memset(dibPixels, 0, (size_t)width * height * 4);
+	SetBkMode(dc, OPAQUE);
+	SetBkColor(dc, RGB(0, 0, 0));
+	SetTextColor(dc, RGB(255, 255, 255));
+	RECT textRect = { 0, 0, width, height };
+	DrawTextW(dc, wideText, -1, &textRect,
+		DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX | DT_EXPANDTABS);
+	size_t dibSize = (size_t)width * height * 4;
+	void *dibCopy = HeapAlloc(GetProcessHeap(), 0, dibSize);
+	if (!dibCopy) {
+		SelectObject(dc, oldFont);
+		SelectObject(dc, oldBitmap);
+		DeleteObject(font);
+		DeleteObject(dib);
+		DeleteDC(dc);
+		HeapFree(GetProcessHeap(), 0, wideText);
+		return luaL_error(L, "could not allocate text image buffer");
+	}
+	memcpy(dibCopy, dibPixels, dibSize);
+	SelectObject(dc, oldFont);
+	SelectObject(dc, oldBitmap);
+	DeleteObject(font);
+	DeleteObject(dib);
+	DeleteDC(dc);
+	HeapFree(GetProcessHeap(), 0, wideText);
+
+	LPDIRECT3DTEXTURE9 texture = NULL;
+	HRESULT result = IDirect3DDevice9_CreateTexture(d3dDevice,
+		(UINT)width, (UINT)height, 1, 0, D3DFMT_A8R8G8B8,
+		D3DPOOL_MANAGED, &texture, NULL);
+	if (result != D3D_OK || !texture) {
+		HeapFree(GetProcessHeap(), 0, dibCopy);
+		return luaL_error(L, "could not create Direct3D text texture (0x%08lx)",
+			(unsigned long)result);
+	}
+
+	D3DLOCKED_RECT locked;
+	result = IDirect3DTexture9_LockRect(texture, 0, &locked, NULL, 0);
+	if (result != D3D_OK) {
+		IDirect3DTexture9_Release(texture);
+		HeapFree(GetProcessHeap(), 0, dibCopy);
+		return luaL_error(L, "could not lock Direct3D text texture (0x%08lx)",
+			(unsigned long)result);
+	}
+	// DIB pixels are BGRA; use their grayscale coverage as texture alpha.
+	// White RGB lets the draw call tint the text with any feedback color.
+	for (int y = 0; y < height; ++y) {
+		const uint8_t *src = (const uint8_t*)dibCopy + (size_t)y * width * 4;
+		D3DCOLOR *dst = (D3DCOLOR*)((uint8_t*)locked.pBits
+			+ (size_t)y * locked.Pitch);
+		for (int x = 0; x < width; ++x) {
+			unsigned alpha = (src[x * 4] + src[x * 4 + 1]
+				+ src[x * 4 + 2]) / 3;
+			dst[x] = D3DCOLOR_ARGB(alpha, 255, 255, 255);
+		}
+	}
+	IDirect3DTexture9_UnlockRect(texture, 0);
+	HeapFree(GetProcessHeap(), 0, dibCopy);
+
+	TEXTUREHANDLE *handle = (TEXTUREHANDLE*)lua_newuserdata(
+		L, sizeof(TEXTUREHANDLE));
+	handle->texture = texture;
+	if (luaL_newmetatable(L, TEXTURE_METATABLE)) {
+		lua_pushcfunction(L, l_textTextureGc);
+		lua_setfield(L, -2, "__gc");
+	}
+	lua_setmetatable(L, -2);
+	return 1;
+}
+
+static int l_drawTextTexture(lua_State *L)
+{
+	TEXTUREHANDLE *handle = (TEXTUREHANDLE*)luaL_checkudata(
+		L, 1, TEXTURE_METATABLE);
+	FLOAT left = (FLOAT)luaL_checknumber(L, 2);
+	FLOAT top = (FLOAT)luaL_checknumber(L, 3);
+	FLOAT right = (FLOAT)luaL_checknumber(L, 4);
+	FLOAT bottom = (FLOAT)luaL_checknumber(L, 5);
+	D3DCOLOR color = (D3DCOLOR)luaL_checkint(L, 6);
+	if (!handle->texture || !d3dDevice) return 0;
+	// D3D9 rasterizes pixel centers at half-integers; compensate for that
+	// so the font texture remains sharp when drawn at its native size.
+	TEXTUREDVERTEX vertices[] = {
+		{ left - 0.5f,  top - 0.5f,    0.0f, 1.0f, color, 0.0f, 0.0f },
+		{ right - 0.5f, top - 0.5f,    0.0f, 1.0f, color, 1.0f, 0.0f },
+		{ left - 0.5f,  bottom - 0.5f, 0.0f, 1.0f, color, 0.0f, 1.0f },
+		{ right - 0.5f, bottom - 0.5f, 0.0f, 1.0f, color, 1.0f, 1.0f },
+	};
+	HRESULT result = IDirect3DDevice9_SetTexture(d3dDevice, 0,
+		(IDirect3DBaseTexture9*)handle->texture);
+	if (result == D3D_OK) result = IDirect3DDevice9_SetFVF(d3dDevice,
+		D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1);
+	if (result == D3D_OK) result = IDirect3DDevice9_SetTextureStageState(
+		d3dDevice, 0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+	if (result == D3D_OK) result = IDirect3DDevice9_SetTextureStageState(
+		d3dDevice, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+	if (result == D3D_OK) result = IDirect3DDevice9_SetTextureStageState(
+		d3dDevice, 0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+	if (result == D3D_OK) result = IDirect3DDevice9_SetTextureStageState(
+		d3dDevice, 0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+	if (result == D3D_OK) result = IDirect3DDevice9_SetTextureStageState(
+		d3dDevice, 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+	if (result == D3D_OK) result = IDirect3DDevice9_SetTextureStageState(
+		d3dDevice, 0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+	if (result == D3D_OK) result = IDirect3DDevice9_SetSamplerState(
+		d3dDevice, 0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+	if (result == D3D_OK) result = IDirect3DDevice9_SetSamplerState(
+		d3dDevice, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+	if (result == D3D_OK) result = IDirect3DDevice9_DrawPrimitiveUP(
+		d3dDevice, D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(TEXTUREDVERTEX));
+	IDirect3DDevice9_SetTexture(d3dDevice, 0, NULL);
+	IDirect3DDevice9_SetFVF(d3dDevice, CUSTOMFVF);
+	IDirect3DDevice9_SetTextureStageState(d3dDevice, 0, D3DTSS_COLOROP,
+		D3DTOP_SELECTARG1);
+	IDirect3DDevice9_SetTextureStageState(d3dDevice, 0, D3DTSS_COLORARG1,
+		D3DTA_DIFFUSE);
+	IDirect3DDevice9_SetTextureStageState(d3dDevice, 0, D3DTSS_ALPHAOP,
+		D3DTOP_SELECTARG1);
+	IDirect3DDevice9_SetTextureStageState(d3dDevice, 0, D3DTSS_ALPHAARG1,
+		D3DTA_DIFFUSE);
+	lua_pushinteger(L, (lua_Integer)result);
+	return 1;
+}
+
 // create vertices that render as a square when using D3DPT_TRIANGLELIST
 #define squareTriangleList(left, top, right, bottom, color) \
 	{ left,  top,    1.0f, 1.0f, color }, \
@@ -294,6 +489,8 @@ const luaL_Reg lib_directX[] = {
 	{ "setupD3D", l_setupD3D },
 	{ "resetD3D", l_resetD3D },
 	{ "rect", l_DXRectangle },
+	{ "createTextTexture", l_createTextTexture },
+	{ "drawTextTexture", l_drawTextTexture },
 	{ "hitbox", l_drawHitbox },
 	{ "setScissor", l_setScissor },
 	{ "clearFrame", l_clearFrame },

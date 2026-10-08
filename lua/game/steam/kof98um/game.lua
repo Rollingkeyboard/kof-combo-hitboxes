@@ -69,11 +69,11 @@ KOF98.toggleHotkeys = {
 
 KOF98.drawInputDisplay = true
 KOF98.logInputTransitions = false
-KOF98.commandCoachEnabled = false
+KOF98.commandCoachEnabled = true
 KOF98.inputHistoryLength = 12
 KOF98.inputTimelineLength = 72
 KOF98.inputTimelinePeriodMs = 16
-KOF98.shermieFeedbackDurationMs = 2000
+KOF98.shermieFeedbackDurationMs = 4000
 KOF98.shermieMotionWindowMs = 1200
 KOF98.shermieMotionStepWindowMs = 450
 KOF98.rhythmGuideBeatMs = 70
@@ -424,7 +424,7 @@ local shermieMoveList = {
 	"SHERMIE - KOF '98 UM command practice (normal Shermie)",
 	"A=LP, B=LK, C=SP, D=SK; forward/back are relative to Shermie's facing.",
 	"Coach checks P1 keyboard commands; it cannot verify move animation or range.",
-	"Timing window: up to 450 ms between direction changes, 1200 ms total.",
+	"Coach target: finish a motion within 1200 ms; keep each step under 450 ms.",
 	"P1 rhythm lane: back, down-back, down, down-forward, forward + B/D.",
 	"Gold notes are targets; green input notes are on beat, orange notes are off beat.",
 	"Throws (close; range cannot be checked from keyboard input):",
@@ -444,32 +444,6 @@ local shermieMoveList = {
 	"  Shermie Flash: HCB, HCB + A/C (LP/SP)",
 }
 
-local feedbackGlyphs = {
-	[" "] = { "000", "000", "000", "000", "000" },
-	A = { "010", "101", "111", "101", "101" }, B = { "110", "101", "110", "101", "110" },
-	C = { "011", "100", "100", "100", "011" }, D = { "110", "101", "101", "101", "110" },
-	E = { "111", "100", "110", "100", "111" }, F = { "111", "100", "110", "100", "100" },
-	G = { "011", "100", "101", "101", "011" }, H = { "101", "101", "111", "101", "101" },
-	I = { "111", "010", "010", "010", "111" }, J = { "001", "001", "001", "101", "010" },
-	K = { "101", "101", "110", "101", "101" }, L = { "100", "100", "100", "100", "111" },
-	M = { "101", "111", "111", "101", "101" }, N = { "101", "111", "111", "111", "101" },
-	O = { "010", "101", "101", "101", "010" }, P = { "110", "101", "110", "100", "100" },
-	Q = { "010", "101", "101", "111", "011" }, R = { "110", "101", "110", "101", "101" },
-	S = { "011", "100", "010", "001", "110" }, T = { "111", "010", "010", "010", "010" },
-	U = { "101", "101", "101", "101", "111" }, V = { "101", "101", "101", "101", "010" },
-	W = { "101", "101", "111", "111", "101" }, X = { "101", "101", "010", "101", "101" },
-	Y = { "101", "101", "010", "010", "010" }, Z = { "111", "001", "010", "100", "111" },
-	["0"] = { "111", "101", "101", "101", "111" }, ["1"] = { "010", "110", "010", "010", "111" },
-	["2"] = { "110", "001", "010", "100", "111" }, ["3"] = { "110", "001", "010", "001", "110" },
-	["4"] = { "101", "101", "111", "001", "001" }, ["5"] = { "111", "100", "110", "001", "110" },
-	["6"] = { "011", "100", "110", "101", "010" }, ["7"] = { "111", "001", "010", "010", "010" },
-	["8"] = { "010", "101", "010", "101", "010" }, ["9"] = { "010", "101", "011", "001", "110" },
-	[":"] = { "000", "010", "000", "010", "000" }, ["-"] = { "000", "000", "111", "000", "000" },
-	["/"] = { "001", "001", "010", "100", "100" }, ["."] = { "000", "000", "000", "000", "010" },
-	[","] = { "000", "000", "000", "010", "100" }, ["+"] = { "000", "010", "111", "010", "000" },
-	["("] = { "001", "010", "010", "010", "001" }, [")"] = { "100", "010", "010", "010", "100" },
-}
-
 local ticksElapsed
 
 local function feedbackName(name)
@@ -478,61 +452,193 @@ local function feedbackName(name)
 	return name
 end
 
-local function fitFeedbackLine(text, maxCharacters)
-	if #text <= maxCharacters then return text end
-	return text:sub(1, maxCharacters - 3) .. "..."
+local function compactFeedbackInput(input)
+	local compact = (input or "INPUT")
+		:gsub("%s*%(%u+%)", "")
+		:gsub("%s*%+%s*", "+")
+	return compact:match("^%s*(.-)%s*$")
+end
+
+local function utf8Characters(text)
+	local characters = {}
+	local index = 1
+	while index <= #text do
+		local first = text:byte(index)
+		local size = first >= 0xF0 and 4 or first >= 0xE0 and 3
+			or first >= 0xC0 and 2 or 1
+		table.insert(characters, text:sub(index, index + size - 1))
+		index = index + size
+	end
+	return characters
+end
+
+local function wrapFeedbackText(text, maxCharacters)
+	local characters = utf8Characters((text or ""):match("^%s*(.-)%s*$"))
+	local lines = {}
+	while #characters > maxCharacters do
+		local splitAt
+		for index = 1, maxCharacters do
+			if characters[index] == " " then splitAt = index end
+		end
+		local lineEnd = splitAt and (splitAt - 1) or maxCharacters
+		if lineEnd > 0 then
+			table.insert(lines, table.concat(characters, "", 1, lineEnd))
+		end
+		local removeThrough = splitAt or maxCharacters
+		for _ = 1, removeThrough do table.remove(characters, 1) end
+		while characters[1] == " " do table.remove(characters, 1) end
+	end
+	if #characters > 0 then table.insert(lines, table.concat(characters)) end
+	return lines
 end
 
 function KOF98:renderCommandFeedback()
-	if not self.shermieFeedbackStart then return end
-	local elapsed = ticksElapsed(hotkey.ticks(), self.shermieFeedbackStart)
-	local remaining = self.shermieFeedbackDurationMs - elapsed
-	if remaining <= 0 then return end
+	local histories = self.commandFeedbacks or {}
+	self.commandFeedbacks = histories
 
-	local scale = 2
-	local current = fitFeedbackLine(feedbackName(self.commandFeedbackName), 34)
-	local lines = {
-		"OK: " .. current,
-		"INPUT: " .. (self.commandFeedbackInput or "BUTTON INPUT"),
-	}
-	if self.commandFeedbackNext and #self.commandFeedbackNext > 0 then
-		local nextName = table.concat(self.commandFeedbackNext, " / ")
-		local nextInput = table.concat(self.commandFeedbackNextInput or {}, " / ")
-		table.insert(lines, "NEXT: " .. feedbackName(nextName))
-		table.insert(lines, "NEXT INPUT: " .. (nextInput ~= "" and nextInput or "FOLLOW-UP"))
-	else
-		table.insert(lines, "NEXT: NO FOLLOW-UP DATA")
-	end
-	for index, text in ipairs(lines) do lines[index] = fitFeedbackLine(text, 72) end
-	local longest = math.max(#lines[1], #lines[2])
-	for index = 3, #lines do longest = math.max(longest, #lines[index]) end
-	local textWidth = (longest * 4 - 1) * scale
-	local x, y = math.floor((self.basicWidth - textWidth - 24) / 2), 78
-	local width, height = textWidth + 24, 10 + #lines * 11
-	local background = colors.rgba(5, 34, 18, 232)
-	self:box(x, y, x + width, y + height, inputColors.positive, background)
-	self:box(x + 2, y + 2, x + width - 2, y + 3,
-		inputColors.positive, inputColors.positive)
+	-- Each player gets a single full-height feed. New entries append at the
+	-- bottom; when it fills, the oldest complete entries scroll off the top.
+	local fontSize = 16
+	local sideWidth = math.min(self.xOffset,
+		self.width - self.xOffset - self.basicWidth * self.xScale)
+	local lineHeight = fontSize + 5
+	local padding = 8
+	local entryGap = 7
+	local now = hotkey.ticks()
+	self.directx.setScissor(0, 0, self.width, self.height)
 
-	for lineIndex, text in ipairs(lines) do
-		local textX = math.floor((self.basicWidth - (#text * 4 - 1) * scale) / 2)
-		local textY = y + 5 + (lineIndex - 1) * 11
-		for index = 1, #text do
-			local glyph = feedbackGlyphs[text:sub(index, index)]
-			if glyph then
-				for row = 1, #glyph do
-					for col = 1, #glyph[row] do
-						if glyph[row]:sub(col, col) == "1" then
-							local gx = textX + ((index - 1) * 4 + col - 1) * scale
-							local gy = textY + (row - 1) * scale
-							self:box(gx, gy, gx + scale, gy + scale,
-								inputColors.positive, inputColors.positive)
-						end
-					end
+	for which = 1, 2 do
+		local history = histories[which]
+		if type(history) ~= "table" or history.start then
+			history = history and { history } or {}
+			histories[which] = history
+		end
+
+		local panelLeft, panelRight, panelTop, panelBottom
+		if sideWidth >= 36 then
+			panelLeft = which == 1 and 0 or self.width - sideWidth
+			panelRight = which == 1 and sideWidth or self.width
+			panelTop, panelBottom = 6, self.height - 6
+		else
+			local gameLeft = self.xOffset
+			local gameRight = gameLeft + self.basicWidth * self.xScale
+			panelLeft = which == 1 and gameLeft + 8 or gameRight - 252
+			panelRight = panelLeft + 244
+			panelTop, panelBottom = self.yOffset + 24, self.yOffset + 200
+		end
+
+		local textLeft = panelLeft + padding
+		local textWidth = math.floor(panelRight - panelLeft - padding * 2)
+		local maxCharacters = math.max(1, math.floor(textWidth / (fontSize * 0.72)))
+		local feedTop = panelTop + 36
+		local feedBottom = panelBottom - padding
+		local availableHeight = feedBottom - feedTop
+		local visible = {}
+		local usedHeight = 0
+
+		for index = #history, 1, -1 do
+			local feedback = history[index]
+			local timing = feedback.timing
+			local lines = { string.format("P%d %s", which, feedback.status or "MATCH") }
+			local name = feedbackName(feedback.name)
+				:gsub("^.*:%s*", ""):gsub(" SHIKI:", "")
+			for _, part in ipairs(wrapFeedbackText(name, maxCharacters)) do
+				table.insert(lines, part)
+			end
+			for _, part in ipairs(wrapFeedbackText(
+				compactFeedbackInput(feedback.input), maxCharacters)) do
+				table.insert(lines, part)
+			end
+			if timing and timing.totalMs then
+				table.insert(lines, string.format("TOTAL %d/%dMS",
+					timing.totalMs, timing.totalLimitMs))
+				table.insert(lines, string.format("STEP %d/%dMS",
+					timing.maxStepMs or 0, timing.stepLimitMs))
+			end
+			local wrapped = {}
+			for _, line in ipairs(lines) do
+				for _, part in ipairs(wrapFeedbackText(line, maxCharacters)) do
+					table.insert(wrapped, part)
 				end
 			end
+
+			local entryHeight = #wrapped * lineHeight
+			local addedHeight = entryHeight + entryGap
+			if usedHeight + addedHeight > availableHeight then break end
+			if not feedback.textTexture then
+				local ok, texture = pcall(self.directx.createTextTexture,
+					table.concat(wrapped, "\n"), textWidth, entryHeight, fontSize)
+				if ok then
+					feedback.textTexture = texture
+				else
+					io.write("Command feedback font rendering failed: ",
+						tostring(texture), "\n")
+				end
+			end
+			table.insert(visible, 1, {
+				feedback = feedback,
+				height = entryHeight,
+				color = (timing and timing.failure)
+					and inputColors.rhythmMiss or inputColors.positive,
+			})
+			usedHeight = usedHeight + addedHeight
+		end
+
+		if #visible == 0 then
+			local readyLines = { string.format("P%d READY", which),
+				"ENTER A COMMAND", "MOTION + BUTTON" }
+			local readyHeight = #readyLines * lineHeight
+			local ready = self.commandReadyFeedback or {}
+			self.commandReadyFeedback = ready
+			if not ready[which] then
+				local ok, texture = pcall(self.directx.createTextTexture,
+					table.concat(readyLines, "\n"), textWidth, readyHeight, fontSize)
+				if ok then ready[which] = texture
+				else io.write("Command feedback font rendering failed: ",
+					tostring(texture), "\n") end
+			end
+			table.insert(visible, { feedback = { textTexture = ready[which] },
+				height = readyHeight, color = inputColors.positive })
+			usedHeight = readyHeight + entryGap
+		end
+
+		-- One continuous backing makes the whole side rail read as a log pane.
+		self.directx.rect(panelLeft, panelTop, panelRight, panelBottom,
+			colors.rgba(0, 0, 0, 238))
+		local header = self.commandFeedHeaders or {}
+		self.commandFeedHeaders = header
+		if not header[which] then
+			local ok, texture = pcall(self.directx.createTextTexture,
+				string.format("P%d INPUT LOG", which), textWidth, 22, fontSize)
+			if ok then header[which] = texture
+			else io.write("Command feedback font rendering failed: ",
+				tostring(texture), "\n") end
+		end
+		self.directx.rect(panelLeft, panelTop, panelRight, panelTop + 3,
+			inputColors.positive)
+		if header[which] then
+			self.directx.drawTextTexture(header[which], textLeft,
+				panelTop + 10, textLeft + textWidth, panelTop + 32,
+				inputColors.positive)
+		end
+
+		local y = feedBottom - usedHeight + entryGap
+		for _, entry in ipairs(visible) do
+			local feedback = entry.feedback
+			if feedback.textTexture then
+				local result = self.directx.drawTextTexture(feedback.textTexture,
+					textLeft, y, textLeft + textWidth, y + entry.height,
+					entry.color)
+				if result ~= 0 and not feedback.textDrawFailed then
+					feedback.textDrawFailed = true
+					io.write("Command feedback texture draw failed (HRESULT ",
+						tostring(result), ").\n")
+				end
+			end
+			y = y + entry.height + entryGap
 		end
 	end
+	self.directx.setScissor(self:getScissorDimensions())
 end
 
 local function printShermieMoveList()
@@ -554,10 +660,8 @@ local function recordMotionDirection(self, which, direction, now)
 	if not direction then return end
 	local history = self.motionHistory[which]
 	local last = history[#history]
-	local elapsed = last and (now - last.time) or 0
-	if elapsed < 0 then elapsed = elapsed + 0x100000000 end
-	if last and elapsed > self.shermieMotionStepWindowMs then
-		for i = #history, 1, -1 do history[i] = nil end
+	if last and ticksElapsed(now, last.time) > 3000 then
+		for index = #history, 1, -1 do history[index] = nil end
 	end
 	table.insert(history, { name = direction, time = now })
 	while #history > 20 do table.remove(history, 1) end
@@ -570,12 +674,16 @@ local function motionMatches(self, which, pattern, now)
 	for i, direction in ipairs(pattern) do
 		if history[first + i - 1].name ~= direction then return false end
 	end
-	local elapsed = now - history[#history].time
-	if elapsed < 0 then elapsed = elapsed + 0x100000000 end
-	local span = now - history[first].time
-	if span < 0 then span = span + 0x100000000 end
-	return elapsed <= self.shermieMotionStepWindowMs
-		and span <= self.shermieMotionWindowMs
+	local totalMs = ticksElapsed(now, history[first].time)
+	local maxStepMs = 0
+	for index = first + 1, #history do
+		maxStepMs = math.max(maxStepMs,
+			ticksElapsed(history[index].time, history[index - 1].time))
+	end
+	maxStepMs = math.max(maxStepMs,
+		ticksElapsed(now, history[#history].time))
+	return maxStepMs <= self.shermieMotionStepWindowMs
+		and totalMs <= self.shermieMotionWindowMs, totalMs, maxStepMs, true
 end
 
 local hcf = { "back", "downback", "down", "downforward", "forward" }
@@ -768,45 +876,104 @@ local function containsName(names, target)
 end
 
 local function commandMotionMatches(self, which, pattern, direction, now)
-	if #pattern == 1 then
-		local history = self.motionHistory[which]
-		local last = history[#history]
-		return direction == pattern[1] and last and last.name == pattern[1]
-	end
-	return direction == pattern[#pattern]
-		and motionMatches(self, which, pattern, now)
+	local history = self.motionHistory[which]
+	local last = history[#history]
+	-- Players often release the direction just before pressing the attack
+	-- button. The button edge still belongs to the most recent motion, so do
+	-- not require a direction to remain held on that exact sample.
+	if direction and direction ~= pattern[#pattern] then return false end
+	if not last or last.name ~= pattern[#pattern] then return false end
+	return motionMatches(self, which, pattern, now)
 end
 
-local feedbackDirections = {
-	up = "UP", down = "DOWN", back = "BACK", forward = "FWD",
-	downback = "DOWN-BACK", downforward = "DOWN-FWD",
-	upback = "UP-BACK", upforward = "UP-FWD",
-}
+local function directionArrow(self, which, direction)
+	local player = self.players and self.players[which]
+	local facingRight = not player or player.facing == 0
+	local back = facingRight and "←" or "→"
+	local forward = facingRight and "→" or "←"
+	if direction == "up" then return "↑" end
+	if direction == "down" then return "↓" end
+	if direction == "back" then return back end
+	if direction == "forward" then return forward end
+	if direction == "downback" then return facingRight and "↙" or "↘" end
+	if direction == "downforward" then return facingRight and "↘" or "↙" end
+	if direction == "upback" then return facingRight and "↖" or "↗" end
+	if direction == "upforward" then return facingRight and "↗" or "↖" end
+	return direction:upper()
+end
 
 local feedbackButtons = {
 	[16] = "A (LP)", [32] = "B (LK)",
 	[64] = "C (SP)", [128] = "D (SK)",
 }
 
-local function commandInputNotation(move)
+local function commandInputNotation(self, which, move)
 	local parts = {}
 	for _, direction in ipairs(move.motion or {}) do
-		table.insert(parts, feedbackDirections[direction] or direction:upper())
+		table.insert(parts, directionArrow(self, which, direction))
 	end
 	local buttons = {}
 	for _, button in ipairs(move.buttons or {}) do
-		table.insert(buttons, feedbackButtons[button] or "BUTTON")
+		table.insert(buttons, feedbackButtons[button]
+			and feedbackButtons[button]:sub(1, 1) or "BUTTON")
 	end
 	local buttonText = table.concat(buttons, "/")
 	if #parts == 0 then return buttonText end
-	return table.concat(parts, ", ") .. " + " .. buttonText
+	return table.concat(parts) .. " + " .. buttonText
+end
+
+local function recentInputNotation(self, which, buttons, now)
+	local history = self.motionHistory[which] or {}
+	local directions = {}
+	for index = #history, 1, -1 do
+		local entry = history[index]
+		-- Preserve the full attempted sequence in the log even when it exceeds
+		-- the coach's suggested command time window.
+		if ticksElapsed(now, entry.time) > 3000 then break end
+		table.insert(directions, 1, directionArrow(self, which, entry.name))
+		if #directions >= 20 then break end
+	end
+	local pressedButtons = {}
+	for _, button in ipairs({ 16, 32, 64, 128 }) do
+		if bit.band(buttons, button) ~= 0 then
+			table.insert(pressedButtons, feedbackButtons[button]:sub(1, 1))
+		end
+	end
+	local motion = table.concat(directions)
+	local buttonText = table.concat(pressedButtons, "+")
+	if motion == "" then return buttonText end
+	if buttonText == "" then return motion end
+	return motion .. " + " .. buttonText
+end
+
+local function storeCommandFeedback(self, which, now)
+	self.commandFeedbacks = self.commandFeedbacks or {}
+	local history = self.commandFeedbacks[which]
+	if not history or history.start then
+		history = {}
+		self.commandFeedbacks[which] = history
+	end
+	local timing = self.commandFeedbackTiming
+	table.insert(history, {
+		start = now,
+		name = self.commandFeedbackName,
+		input = self.commandFeedbackInput,
+		timing = timing,
+		status = timing and timing.unrecognized and "UNLISTED"
+			or (timing and timing.failure
+				and (timing.totalMs and "OVER COACH TARGET" or "NO MATCH") or "MATCH"),
+		failure = timing and timing.failure or false,
+	})
+	-- Keep enough recent attempts to scroll through the side panel without
+	-- allowing an unbounded session to retain textures forever.
+	while #history > 60 do table.remove(history, 1) end
 end
 
 function KOF98:checkCommandMove(which, mask, now)
 	local direction = directionName(mask)
 	local buttons = bit.band(mask, 0xF0)
 	local patterns, characterName = self:loadCommandSet(which)
-	if not direction or buttons == 0 then return end
+	if buttons == 0 then return end
 	if not patterns then return end
 	local byName = {}
 	for _, move in ipairs(patterns) do
@@ -819,17 +986,29 @@ function KOF98:checkCommandMove(which, mask, now)
 	local chain = self.commandFollowups and self.commandFollowups[which]
 	local selected
 	local matchedFollowup = false
+	local timingRejected
 	if chain then
 		if ticksElapsed(now, chain.time) <= 2000 then
 			for _, name in ipairs(chain.names) do
 				for _, move in ipairs(byName[name] or {}) do
-					if move.followupOnly and hasOneOfButtons(buttons, move.buttons)
-						and ((move.motion and commandMotionMatches(self, which,
-							move.motion, direction, now))
-							or (not move.motion and directionName(mask) ~= nil)) then
-						selected = move
-						matchedFollowup = true
-						break
+					if move.followupOnly and hasOneOfButtons(buttons, move.buttons) then
+						local matched, totalMs, maxStepMs, sequenceMatched
+						if move.motion then
+							matched, totalMs, maxStepMs, sequenceMatched =
+								commandMotionMatches(self, which,
+									move.motion, direction, now)
+						else
+							matched = directionName(mask) ~= nil
+						end
+						if matched then
+							selected = move
+							matchedFollowup = true
+							break
+						elseif sequenceMatched then
+							timingRejected = {
+								move = move, totalMs = totalMs, maxStepMs = maxStepMs,
+							}
+						end
 					end
 				end
 				if selected then break end
@@ -850,10 +1029,18 @@ function KOF98:checkCommandMove(which, mask, now)
 				and move.motion
 				and (not move.followupOnly or (chain
 					and containsName(chain.names, move.name)))
-				and #move.motion > bestMotionLength
-				and commandMotionMatches(self, which, move.motion, direction, now) then
-				selected = move
-				bestMotionLength = #move.motion
+				and #move.motion > bestMotionLength then
+				local matched, totalMs, maxStepMs, sequenceMatched =
+					commandMotionMatches(self, which, move.motion, direction, now)
+				if matched then
+					selected = move
+					bestMotionLength = #move.motion
+				elseif sequenceMatched and (not timingRejected
+					or #move.motion > #timingRejected.move.motion) then
+					timingRejected = {
+						move = move, totalMs = totalMs, maxStepMs = maxStepMs,
+					}
+				end
 			end
 		end
 	end
@@ -871,11 +1058,25 @@ function KOF98:checkCommandMove(which, mask, now)
 		self.shermieFeedbackName = selected.name
 		self.commandFeedbackName = selected.name
 		self.commandFeedbackNext = selected.next
-		self.commandFeedbackInput = commandInputNotation(selected)
+		self.commandFeedbackInput = commandInputNotation(self, which, selected)
+		self.commandFeedbackTiming = nil
+		local motionMatched, totalMs, maxStepMs
+		if selected.motion then
+			motionMatched, totalMs, maxStepMs = commandMotionMatches(
+				self, which, selected.motion, direction, now)
+		end
+		if motionMatched and totalMs then
+			self.commandFeedbackTiming = {
+				totalMs = totalMs,
+				maxStepMs = maxStepMs,
+				totalLimitMs = self.shermieMotionWindowMs,
+				stepLimitMs = self.shermieMotionStepWindowMs,
+			}
+		end
 		self.commandFeedbackNextInput = {}
 		for _, nextName in ipairs(selected.next or {}) do
 			for _, nextMove in ipairs(byName[nextName] or {}) do
-				local notation = commandInputNotation(nextMove)
+				local notation = commandInputNotation(self, which, nextMove)
 				if not containsName(self.commandFeedbackNextInput, notation) then
 					table.insert(self.commandFeedbackNextInput, notation)
 				end
@@ -884,43 +1085,95 @@ function KOF98:checkCommandMove(which, mask, now)
 		io.write("\nP", which, " (", characterName, ") correct input: ", selected.name,
 			selected.close and " (close range required)" or "", "\n")
 		if matchedFollowup and chain then
-			io.write(string.format("Follow-up spacing: %d ms after the previous recognized move (measurement only).\n",
-				ticksElapsed(now, chain.time)))
+			local followupMs = ticksElapsed(now, chain.time)
+			self.commandFeedbackTiming = self.commandFeedbackTiming or {}
+			self.commandFeedbackTiming.followupMs = followupMs
+			self.commandFeedbackTiming.followupLimitMs = 2000
+			io.write(string.format("Follow-up spacing: %d ms (coach link window <= 2000 ms; actual game cancel timing is not checked).\n",
+				followupMs))
+		end
+		if motionMatched and totalMs then
+			io.write(string.format("Command motion: %d/%d ms total; longest step %d/%d ms (coach limits, not game cancel windows).\n",
+				totalMs, self.shermieMotionWindowMs,
+				maxStepMs, self.shermieMotionStepWindowMs))
 		end
 		if selected.next and #selected.next > 0 then
 			io.write("Next combo input: ", table.concat(selected.next, "  OR  "),
 				". Follow the game's cancel timing; the guide does not specify a fixed beat.\n")
 		end
+		storeCommandFeedback(self, which, now)
 		return
 	end
 
+	local simpleMatched = false
 	if characterName == "Shermie" and direction == "forward" and bit.band(buttons, 32) ~= 0 then
+		simpleMatched = true
 		self.shermieFollowupUntil = nil
 		if self.commandFollowups then self.commandFollowups[which] = nil end
 		self.shermieFeedbackStart = now
 		self.shermieFeedbackName = "Shermie Stand"
 		self.commandFeedbackName = "Shermie Stand"
 		self.commandFeedbackNext = nil
-		self.commandFeedbackInput = "FWD + B (LK)"
+		self.commandFeedbackInput = directionArrow(self, which, "forward") .. " + B"
+		self.commandFeedbackTiming = nil
 		io.write("\nP", which, " correct input: Shermie Stand\n")
-	elseif (direction == "back" or direction == "forward")
+	elseif direction and (direction == "back" or direction == "forward")
 		and characterName == "Shermie" and bit.band(buttons, 64) ~= 0 then
+		simpleMatched = true
 		self.shermieFollowupUntil = nil
 		self.shermieFeedbackStart = now
 		self.shermieFeedbackName = "Shermie Flash Original (close throw)"
 		self.commandFeedbackName = "Shermie Flash Original"
 		self.commandFeedbackNext = nil
-		self.commandFeedbackInput = direction:upper() .. " + C (SP)"
+		self.commandFeedbackInput = directionArrow(self, which, direction) .. " + C"
+		self.commandFeedbackTiming = nil
 		io.write("\nP", which, " input matches Shermie Flash Original; close range is required.\n")
-	elseif (direction == "back" or direction == "forward")
+	elseif direction and (direction == "back" or direction == "forward")
 		and characterName == "Shermie" and bit.band(buttons, 128) ~= 0 then
+		simpleMatched = true
 		self.shermieFollowupUntil = nil
 		self.shermieFeedbackStart = now
 		self.shermieFeedbackName = "Front Flash (close throw)"
 		self.commandFeedbackName = "Front Flash"
 		self.commandFeedbackNext = nil
-		self.commandFeedbackInput = direction:upper() .. " + D (SK)"
+		self.commandFeedbackInput = directionArrow(self, which, direction) .. " + D"
+		self.commandFeedbackTiming = nil
 		io.write("\nP", which, " input matches Front Flash; close range is required.\n")
+	end
+
+	if timingRejected then
+		local move = timingRejected.move
+		self.shermieFeedbackStart = now
+		self.commandFeedbackName = move.name
+		self.commandFeedbackNext = nil
+		self.commandFeedbackInput = commandInputNotation(self, which, move)
+		self.commandFeedbackTiming = {
+			failure = true,
+			totalMs = timingRejected.totalMs,
+			maxStepMs = timingRejected.maxStepMs,
+			totalLimitMs = self.shermieMotionWindowMs,
+			stepLimitMs = self.shermieMotionStepWindowMs,
+		}
+		local reason = timingRejected.totalMs > self.shermieMotionWindowMs
+			and "total time exceeded coach target"
+			or "a direction/button step exceeded coach target"
+		io.write(string.format("P%d (%s) %s: %s; %d/%d ms total, longest step %d/%d ms. Coach targets only; game cancel timing is not checked.\n",
+			which, characterName, move.name, reason, timingRejected.totalMs,
+			self.shermieMotionWindowMs, timingRejected.maxStepMs,
+			self.shermieMotionStepWindowMs))
+	elseif not selected and not simpleMatched then
+		self.shermieFeedbackStart = now
+		self.commandFeedbackName = "INPUT SEEN - NOT RECOGNIZED"
+		self.commandFeedbackNext = nil
+		self.commandFeedbackInput = recentInputNotation(self, which, buttons, now)
+		self.commandFeedbackTiming = { failure = true, unrecognized = true }
+		io.write("P", which, " (", characterName,
+			") input seen but not recognized by this character's command data: ",
+			self.commandFeedbackInput, "\n")
+	end
+	if simpleMatched or timingRejected
+		or (not selected and not simpleMatched) then
+		storeCommandFeedback(self, which, now)
 	end
 end
 
@@ -1191,7 +1444,8 @@ function KOF98:checkInputs()
 				if self.commandCoachEnabled then
 					io.write("Command validation mode enabled. Current P1/P2 characters will load their own command sets.\n")
 					io.write("Recognized commands and valid follow-ups will be shown in this console.\n")
-					io.write("Timing is measured between recognized follow-ups; exact cancel windows are move-specific.\n")
+					io.write(string.format("Coach timing limits: %d ms total, %d ms per direction/button step. These do not represent the game's cancel windows.\n",
+						self.shermieMotionWindowMs, self.shermieMotionStepWindowMs))
 				end
 			end
 		end
